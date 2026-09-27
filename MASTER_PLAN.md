@@ -31,8 +31,8 @@ fetch these separately.
 
 ## Secrets — local only, never pushed
 
-- The the provider key lives in `.env` as `JEV_API_KEY=...`. `.env` is gitignored and never
-  committed. Read it with stdlib `os.environ` or a three-line `.env` parse — no `python-dotenv`.
+- The key lives in `.env` as `JEV_API_KEY=...`, alongside `JEV_API_URL` and `JEV_MODEL`. No
+  provider is named in tracked source or docs. `.env` is gitignored and never committed. Read it with stdlib `os.environ` or a three-line `.env` parse — no `python-dotenv`.
 - The app runs only on this laptop. No deploy target, no CI, no container.
 - The key was pasted in plaintext into a session transcript. **Rotate it.**
 
@@ -95,7 +95,7 @@ kills trades:
 
 ## Jev
 
-- `POST https://$JEV_API_URL` — not the app, not `/v1/responses`
+- `POST $JEV_API_URL` — the endpoint is configuration, not code
 - model `jev-1.13-free` (limited-time free; `jev-1.13` is the paid one)
 - key in env `JEV_API_KEY`, never committed
 - question types: `noul` (yes/no + probability), `choice` (criteria map), `score` (rubric array).
@@ -103,8 +103,8 @@ kills trades:
 - **Jev cannot compute a price.** No text, no arithmetic. It picks among plans Python builds.
 - ~500 input / ~100 output tokens per call. 1000 tickers × 500 ≈ 500k input tokens per full-universe
   run — that is why the shortlist exists.
-- The free tier is blocked on `/v1/responses` ("can only be used from within the provider") but **not**
-  on `/the structured endpoint`. Verified working.
+- The free tier is blocked on the provider's chat-shaped endpoint but **not** on the structured
+  one this project uses. Verified working.
 
 Questions to ask per candidate:
 
@@ -233,7 +233,7 @@ Not a broker. No orders are placed. Every run writes decisions; a human presses 
 | `idx.py` | `GetStockSummary` over stdlib http.client — universe, suspended filter, float, foreign flow |
 | `store.py` | SQLite: `idx_daily` (also the 24h cache), `scan` (coverage), `decision` (the journal), plus `report()` and `watchlist()` |
 | `screen.py` | the 21 categories, the required gate, the rank score |
-| `jev.py` | the the structured endpoint client and the 5 typed questions |
+| `jev.py` | the decision client and the 5 typed questions |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `analyze` |
 
 ```bash

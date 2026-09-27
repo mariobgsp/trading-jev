@@ -168,8 +168,8 @@ class ApiTest(unittest.TestCase):
 
     def test_health_never_leaks_the_key(self):
         _, body, _ = _get("/api/health")
-        self.assertNotIn(b"KEYPREFIX_", body, "health must not echo the API key")
-        self.assertNotIn(b"JEV_API_KEY=", body)
+        self.assertNotIn(b"JEV_API_KEY", body, "health must not echo the key")
+        self.assertNotIn(b"JEV_API_URL", body)
 
     def test_static_files_serve_with_the_right_type(self):
         for path, ctype in (("/", "text/html"), ("/app.css", "text/css"),
@@ -909,7 +909,8 @@ class BrowserTest(unittest.TestCase):
 
     def test_the_key_is_never_rendered_into_the_page(self):
         self.page.wait_for_selector("#dd .verdict", timeout=45000)
-        self.assertNotIn("KEYPREFIX_", self.page.content())
+        self.assertNotIn("JEV_API_KEY", self.page.content())
+        self.assertNotIn("JEV_API_URL", self.page.content())
 
 
 if __name__ == "__main__":

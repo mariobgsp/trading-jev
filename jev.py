@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Jev — the decider.
 
-Jev is a System One model (TypeSafe AI), reached at the /the structured endpoint endpoint of the provider.
+Jev is a structured-decision model reached at a private HTTP endpoint. The endpoint and the
+model id are configuration, not code — see `.env.example`. Nothing here names the provider.
 It does not generate text: you hand it a `state` and a set of typed questions, and it returns a
 typed value plus a full probability distribution for each. Two consequences shape this design:
 
@@ -10,8 +11,8 @@ typed value plus a full probability distribution for each. Two consequences shap
   - `verdict.probabilities` is continuous, so "no trade" is a threshold on a number rather than
     the model's mood, and Jev's accuracy is measurable from the journal alone.
 
-The free tier is rejected on /v1/responses ("can only be used from within the provider") and works
-here. Do not simplify this back to the chat endpoint.
+The free tier this model runs on is rejected on the provider's other, chat-shaped endpoint and
+works here. Do not "simplify" this back to it.
 
 Question types are exactly three: `noul` (yes/no + probability), `choice` (criteria map) and
 `score` (rubric array). `str` and `bool` do not exist and are rejected with "Invalid request".
@@ -24,11 +25,7 @@ import json
 import os
 import urllib.parse
 
-URL = "https://$JEV_API_URL"
-_ENDPOINT = urllib.parse.urlsplit(URL)
-if _ENDPOINT.scheme != "https":
-    raise SystemExit(f"refusing non-https endpoint: {URL}")
-MODEL = "jev-1.13-free"
+_MODEL_KEY = "JEV_MODEL"
 
 # Provisional. Recalibrate from the journal after ~50 scored candidates.
 ENTER_THRESHOLD = 0.6
@@ -73,53 +70,84 @@ _SHAPES = {
 }
 
 
-class JevError(RuntimeError):
-    """Any failure talking to the structured endpoint. The body carries the reason, so keep it."""
+def _env(name):
+    """One value from the environment, then from .env. No dependency, no parsing library.
 
-
-def _key():
-    k = os.environ.get("JEV_API_KEY")
-    if k:
-        return k
+    Everything provider-specific lives here and in .env, not in this file: the endpoint, the model
+    id and the key are all configuration."""
+    v = os.environ.get(name)
+    if v:
+        return v.strip()
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     try:
         with open(path) as fh:
             for line in fh:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
-                    name, _, value = line.partition("=")
-                    if name.strip() == "JEV_API_KEY":
+                    key, _, value = line.partition("=")
+                    if key.strip() == name:
                         return value.strip()
     except OSError:
         pass
-    raise SystemExit("no JEV_API_KEY — put it in .env (see .env.example)")
+    return None
 
 
-def ask(state, questions=QUESTIONS, model=MODEL, timeout=60):
-    """One the structured endpoint call. `state` is prose (str) or a JSON-serialisable dict.
+def _setting(name):
+    v = _env(name)
+    if not v:
+        raise SystemExit(f"no {name} — put it in .env (see .env.example)")
+    return v
 
-    http.client rather than urllib.request: the endpoint is a single fixed https host, and
-    naming it explicitly leaves no room for a scheme to be smuggled in from a variable.
+
+def has_credentials():
+    """True when a key is configured. The health endpoint uses this so the UI can say why Jev
+    is unavailable instead of raising on a missing setting."""
+    return bool(_env("JEV_API_KEY"))
+
+
+def _endpoint():
+    """The only URL this client will ever talk to, audited: https and nothing else."""
+    url = _setting("JEV_API_URL")
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https":
+        raise JevError(f"refusing {parts.scheme or 'no'} scheme: {url}")
+    return parts
+
+
+class JevError(RuntimeError):
+    """Any failure talking to the decision endpoint. The body carries the reason, keep it."""
+
+
+def ask(state, questions=QUESTIONS, model=None, timeout=60):
+    """One decision call. `state` is prose (str) or a JSON-serialisable dict.
+
+    http.client rather than urllib.request: the scheme is explicit in the constructor, so this
+    helper can only ever talk to the endpoint it was given.
     """
-    body = json.dumps({"model": model, "state": state, "questions": questions}).encode()
-    conn = http.client.HTTPSConnection(_ENDPOINT.netloc, timeout=timeout)
+    parts = _endpoint()
+    body = json.dumps({
+        "model": model or _setting("JEV_MODEL"),
+        "state": state,
+        "questions": questions,
+    }).encode()
+    conn = http.client.HTTPSConnection(parts.netloc, timeout=timeout)
     try:
-        conn.request("POST", _ENDPOINT.path, body=body, headers={
-            "Authorization": "Bearer " + _key(),
+        conn.request("POST", parts.path, body=body, headers={
+            "Authorization": "Bearer " + _setting("JEV_API_KEY"),
             "Content-Type": "application/json",
         })
         resp = conn.getresponse()
         status, raw = resp.status, resp.read()
     except (OSError, http.client.HTTPException) as e:
-        raise JevError(f"the structured endpoint call failed: {e}") from e
+        raise JevError(f"jev call failed: {e}") from e
     finally:
         conn.close()
     if status >= 400:
-        raise JevError(f"the structured endpoint {status}: {raw.decode(errors='replace')[:400]}")
+        raise JevError(f"jev endpoint {status}: {raw.decode(errors='replace')[:400]}")
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
-        raise JevError(f"the structured endpoint returned non-JSON: {raw[:200]!r}") from e
+        raise JevError(f"jev returned non-JSON: {raw[:200]!r}") from e
 
 
 def enter_probability(answers):

@@ -106,16 +106,9 @@ def get_job(jid):
 
 # ---------- API ----------
 def api_health():
-    try:
-        jev._key()
-        has_key = True
-    except SystemExit:
-        has_key = False
-    db = store.conn()
-    return {"ok": True, "has_key": has_key,
-            "sessions": len(store.idx_sessions(90)),
+    return {"ok": True, "has_key": jev.has_credentials(),
             "latest_session": (store.idx_sessions() or [None])[0],
-            "decisions": db.execute("SELECT COUNT(*) FROM decision").fetchone()[0]}
+            "decisions": store.conn().execute("SELECT COUNT(*) FROM decision").fetchone()[0]}
 
 
 def api_deepdive(ticker):

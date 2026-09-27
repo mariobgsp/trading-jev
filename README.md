@@ -3,8 +3,8 @@
 A momentum screen for the IDX gorengan band where **Jev decides whether to enter**, and a journal
 that scores whether Jev was right.
 
-Python fetches the data and computes 23 categories, Jev scores the shortlist through the provider's
-structured endpoint, and every decision — ENTER *and* SKIP — is journalled so you can find out
+Python fetches the data and computes 23 categories, Jev scores the shortlist over a private
+HTTP endpoint, and every decision — ENTER *and* SKIP — is journalled so you can find out
 later whether the model earns its place. No orders are placed. A human presses the buy.
 
 `MASTER_PLAN.md` is the design record: why each decision was made, and what the measurements
@@ -21,20 +21,19 @@ were. This file is how to run it.
 - **The `trading-tools` repo** beside this one, at `~/Projects/trading-tools`. This project
   borrows its verified indicators, its Yahoo fetcher and its entry plan rather than
   reimplementing them. If yours lives elsewhere, set `TRADING_TOOLS_DIR`.
-- **An the provider zen API key** — the account credential from <https://the provider's account page>. The key
-  already in `an environment file you may already have` works (verified), so if you have one you can skip the `.env`
-  and just `export JEV_API_KEY=...`. Jev is reached at `/v1/the structured endpoint`; the free tier
-  is rejected on `/v1/responses` with "can only be used from within the provider", so an endpoint
-  that works for the rest of pi may not be the right one here.
+- **A credential for the decision endpoint.** Nothing about the provider is written down here:
+  the key, the endpoint URL and the model id all live in `.env`. The model this project runs on
+  is only served on the structured endpoint, not the provider's chat-shaped one, so an endpoint
+  that works elsewhere is not necessarily the right one.
 
 ## Setup
 
 ```bash
 cp .env.example .env      # then put your key in it
-$EDITOR .env              # JEV_API_KEY=KEYPREFIX_...
+$EDITOR .env              # JEV_API_KEY / JEV_API_URL / JEV_MODEL
 ```
 
-Or skip the file entirely if you already have a key in your shell: `export JEV_API_KEY=...`.
+Or skip the file entirely if your shell already exports them: `export JEV_API_KEY=...`.
 `.env` is read only if the variable is not already set.
 
 Check the three moving parts before trusting a run:
@@ -125,7 +124,7 @@ A name counts as `EXCLUDED` only if a **complete** scan ran without it. A partia
 |---|---|
 | data | `idx.py` — IDX snapshot and foreign flow; `tools.py` — Yahoo bars |
 | screen | `pivots.py` + `screen.py` — significant highs/lows, the 23 categories |
-| decide | `jev.py` — five typed questions, one structured call |
+| decide | `jev.py` — five typed questions, one call to the configured endpoint |
 | journal | `store.py` — the SQLite record everything is scored from |
 
 **Two required gates** — both must pass:
@@ -235,7 +234,7 @@ looking like a broken install.
 | `idx.py` | IDX end-of-day summary: universe, suspended filter, float, foreign flow |
 | `pivots.py` | significant highs and lows; self-check proves no repainting |
 | `screen.py` | the 23 categories, the two required gates, the rank score |
-| `jev.py` | the structured client and the five questions |
+| `jev.py` | the decision client and the five questions |
 | `store.py` | SQLite: `idx_daily`, `scan`, `decision`; `report()` and `watchlist()` |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `watchlist` · `analyze` |
 | `serve.py` | the local web app: deepdive, scan, journal |
