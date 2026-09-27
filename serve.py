@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)   # noqa: E402 - a module run from another cwd still finds its siblings
+import idx  # noqa: E402
 import jev  # noqa: E402
 import screen  # noqa: E402
 import store  # noqa: E402
@@ -189,16 +190,73 @@ def api_report(since):
     return rep
 
 
-def api_watchlist():
-    return {"rows": store.watchlist(),
+def api_watchlist(perf, cap=60):
+    """The cohort. `perf` adds forward returns per name, which means one bar fetch each, so it
+    is capped — bars are cached, but a few hundred names is still a slow response."""
+    from run import forward_perf
+    rows = store.watchlist()
+    for r in rows[:cap]:
+        r["perf"] = None
+        if not perf:
+            continue
+        try:
+            r["perf"] = forward_perf(bars_for(r["ticker"], "6mo"), r["first_seen"])
+        except Exception:  # noqa: BLE001 - one bad ticker must not blank the cohort
+            r["perf"] = None
+    return {"rows": rows, "perf": bool(perf), "perf_capped": len(rows) > cap,
             "complete_sessions": store.complete_sessions()}
+
+
+def api_shortlist():
+    """The latest session's shortlist, re-evaluated from bars.
+
+    The journal records *which* names cleared the gates; this reports what they looked like, by
+    re-running evaluate() over cached bars. Doing it here rather than parsing the scan's stdout
+    means the table cannot drift from the same code path the CLI uses."""
+    sessions = store.idx_sessions()
+    if not sessions:
+        return {"session": None, "rows": [], "listed": None, "tradable": None,
+                "under_1000": None, "eligible": None, "examined": None, "shortlisted": 0}
+    session = sessions[0]
+    day = store.idx_day(session)
+    tradable = [r for r in day if not idx.suspended(r["remarks"])]
+    under = [r for r in tradable if r["close"] and 0 < r["close"] < idx.MAX_PRICE]
+    scan = store.conn().execute(
+        "SELECT eligible, examined FROM scan WHERE session=?", (session,)).fetchone()
+    names = {r["code"]: r["name"] for r in day}
+
+    rows, skipped = [], []
+    for w in store.watchlist():
+        if w["last_seen"] != session:
+            continue
+        try:
+            bars = bars_for(w["ticker"], "6mo")
+            v = screen.evaluate(w["ticker"], bars)
+        except Exception as e:  # noqa: BLE001 - reported below, never swallowed
+            skipped.append({"ticker": w["ticker"], "error": f"{type(e).__name__}"})
+            continue
+        if v is None:
+            skipped.append({"ticker": w["ticker"], "error": "could not evaluate"})
+            continue
+        rows.append({"ticker": w["ticker"], "name": names.get(w["ticker"], ""),
+                     "close": v["context"]["close"], "rsi": v["context"]["rsi"],
+                     "adv20": v["context"]["adv20"], "rank_score": v["rank_score"],
+                     "rank_signals": v["rank_signals"], "avg_p": w["avg_p"],
+                     "entered": w["entered"], "passed": v["passed"]})
+    rows.sort(key=lambda r: (-r["rank_score"], -(r["adv20"] or 0), r["ticker"]))
+    return {"session": session, "rows": rows, "listed": len(day), "tradable": len(tradable),
+            "under_1000": len(under),
+            "eligible": scan["eligible"] if scan else None,
+            "examined": scan["examined"] if scan else None,
+            "shortlisted": len(rows), "skipped": skipped}
 
 
 ROUTES = {
     "/api/health": lambda q: api_health(),
     "/api/deepdive": lambda q: api_deepdive((q.get("ticker") or [""])[0].strip().upper()),
     "/api/report": lambda q: api_report((q.get("since") or ["all"])[0]),
-    "/api/watchlist": lambda q: api_watchlist(),
+    "/api/watchlist": lambda q: api_watchlist((q.get("perf") or ["1"])[0] == "1"),
+    "/api/shortlist": lambda q: api_shortlist(),
 }
 
 
@@ -273,12 +331,23 @@ def _clamp(raw, lo, hi, default):
         return default
 
 
+def _bind(port, attempts=20):
+    """Fall forward to the next free port. Port 8787 is already held by caveman-proxy on this
+    machine, and a bare traceback for 'address in use' is a poor first impression."""
+    for p in range(port, port + attempts):
+        try:
+            return ThreadingHTTPServer(("127.0.0.1", p), Handler), p
+        except OSError:
+            continue
+    raise SystemExit(f"no free port in {port}-{port + attempts - 1}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Local web app for trading-jev")
     ap.add_argument("--port", type=int, default=8787)
     a = ap.parse_args()
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    print(f"trading-jev  ->  http://127.0.0.1:{a.port}   (ctrl-c to stop)")
+    srv, port = _bind(a.port)
+    print(f"trading-jev  ->  http://127.0.0.1:{port}   (ctrl-c to stop)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

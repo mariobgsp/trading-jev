@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trading-jev — the decider, and its record</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<div class="nav-wrap">
+  <nav class="nav">
+    <span class="brand">trading-jev <em>· local</em></span>
+    <a href="#deepdive" class="on">Deepdive</a>
+    <a href="#scan">Scan</a>
+    <a href="#journal">Journal</a>
+  </nav>
+</div>
+
+<main>
+
+  <!-- ══ DEEPDIVE ══════════════════════════════════════════════════════ -->
+  <section id="deepdive">
+    <span class="eyebrow">01 — Deepdive</span>
+    <h2>One name,<br>all twenty-three categories.</h2>
+    <p class="lede">Everything the screen knows about a single ticker, and what Jev makes of it.
+      This is a preview — it does not journal. <code class="num">run</code> is the journal.</p>
+
+    <div class="bento">
+
+      <div class="shell s7 reveal">
+        <div class="core">
+          <h3>Look at a ticker</h3>
+          <p class="sub">An IDX code. Letters only — BBCA, TLKM, GOTO.</p>
+          <div class="field">
+            <input type="text" id="ticker" placeholder="BBCA" maxlength="6" autocomplete="off" spellcheck="false">
+            <button class="btn" id="go">Deepdive<span class="btn-ico">↗</span></button>
+          </div>
+          <div id="dd"></div>
+        </div>
+      </div>
+
+      <div class="shell s5 reveal">
+        <div class="core">
+          <h3>Price against the significant high</h3>
+          <p class="sub" id="spark-sub">120 sessions. The rule is the dashed line.</p>
+          <div id="spark"></div>
+        </div>
+      </div>
+
+      <div class="shell s12 reveal">
+        <div class="core">
+          <h3>The categories</h3>
+          <p class="sub">Outlined chips are gates — a candidate needs both. Filled chips fired.</p>
+          <div class="chips" id="cats"><p class="empty">Run a deepdive to populate.</p></div>
+        </div>
+      </div>
+
+      <div class="shell s7 reveal">
+        <div class="core">
+          <h3>What Jev answered</h3>
+          <p class="sub">Five typed questions, one call, every answer with a probability.</p>
+          <div id="jev"><p class="empty">—</p></div>
+        </div>
+      </div>
+
+      <div class="shell s5 reveal">
+        <div class="core">
+          <h3>The entry plan</h3>
+          <p class="sub">Python computes this. Jev cannot return a price.</p>
+          <div id="plan"><p class="empty">Shown only for a name that clears both gates.</p></div>
+          <h3 style="margin-top:1.5rem">The state Jev actually saw</h3>
+          <p class="sub">Worth reading when a verdict surprises you.</p>
+          <div class="prose" id="prose"><span class="muted">—</span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══ SCAN ═════════════════════════════════════════════════════════ -->
+  <section id="scan">
+    <span class="eyebrow">02 — Scan</span>
+    <h2>Screen the whole<br>gorengan band.</h2>
+    <p class="lede">IDX universe → price and flow pre-gates → two category gates → Jev → journal.
+      A scan takes about a minute and spends free Jev calls.</p>
+
+    <div class="bento">
+
+      <div class="shell s4 reveal">
+        <div class="core">
+          <h3>Run a scan</h3>
+          <p class="sub">Journals every decision, vetoes included.</p>
+          <div class="field" style="margin-bottom:.8rem">
+            <input type="text" id="limit" value="200" inputmode="numeric" title="max candidates to fetch bars for">
+            <button class="btn" id="scan-go">Scan<span class="btn-ico">↗</span></button>
+          </div>
+          <div class="pills" style="margin-bottom:1rem">
+            <button class="pill" data-resolve>Resolve open outcomes</button>
+          </div>
+          <pre class="log" id="log"></pre>
+        </div>
+      </div>
+
+      <div class="shell s8 reveal">
+        <div class="core">
+          <h3>The funnel</h3>
+          <p class="sub" id="funnel-sub">Nothing scanned yet this session.</p>
+          <div class="tiles" id="funnel"></div>
+          <h3 style="margin-top:1.8rem">The shortlist</h3>
+          <p class="sub">Names that cleared both gates, ranked. The last scan is in the journal.</p>
+          <div class="scroll"><table id="short">
+            <thead><tr><th>Ticker</th><th>Name</th><th class="n">Close</th><th class="n">RSI</th>
+              <th class="n">ADV20 bn</th><th class="n">Rank</th><th>Signals</th></tr></thead>
+            <tbody><tr><td colspan="7" class="empty">Run a scan.</td></tr></tbody>
+          </table></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══ JOURNAL ══════════════════════════════════════════════════════ -->
+  <section id="journal">
+    <span class="eyebrow">03 — Journal</span>
+    <h2>Was the decider<br>any good?</h2>
+    <p class="lede">The only question that matters, and the one a single day cannot answer.
+      R rather than percent, so a 3% stop and a 9% stop count alike.</p>
+
+    <div class="bento">
+
+      <div class="shell s3 reveal">
+        <div class="core tight">
+          <h3>Window</h3>
+          <div class="pills" id="windows" style="margin-top:.7rem">
+            <button class="pill" data-since="7d">7d</button>
+            <button class="pill" data-since="30d">30d</button>
+            <button class="pill" data-since="90d">90d</button>
+            <button class="pill on" data-since="all">All</button>
+          </div>
+          <p class="small muted" style="margin-top:1rem" id="since-note"></p>
+        </div>
+      </div>
+
+      <div class="shell s9 reveal">
+        <div class="core">
+          <h3>Performance</h3>
+          <p class="sub" id="rep-sub">—</p>
+          <div class="tiles" id="tiles"></div>
+        </div>
+      </div>
+
+      <div class="shell s5 reveal">
+        <div class="core">
+          <h3>Equity, in R</h3>
+          <p class="sub">Cumulative across every resolved entry.</p>
+          <div id="equity"></div>
+        </div>
+      </div>
+
+      <div class="shell s7 reveal">
+        <div class="core">
+          <h3>Is Jev calibrated?</h3>
+          <p class="sub">Hit rate per probability bucket. If the high buckets are no better than
+            the low ones, the model is noise and the honest response is to delete it.</p>
+          <div class="rows" id="calib"><p class="empty">Nothing resolved yet.</p></div>
+        </div>
+      </div>
+
+      <div class="shell s12 reveal">
+        <div class="core">
+          <h3>The watchlist cohort</h3>
+          <p class="sub">Every name ever surfaced, and what it did afterwards — including the ones
+            Jev vetoed. That is how you find out whether a veto was right.</p>
+          <div class="scroll"><table id="cohort">
+            <thead><tr><th>Ticker</th><th>First seen</th><th>Last seen</th><th class="n">Seen</th>
+              <th class="n">Avg p</th><th>Status</th><th class="n">+5</th><th class="n">+10</th>
+              <th class="n">+20</th><th class="n">MFE20</th><th class="n">MAE20</th></tr></thead>
+            <tbody><tr><td colspan="11" class="empty">Nothing surfaced yet.</td></tr></tbody>
+          </table></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

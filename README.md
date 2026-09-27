@@ -159,6 +159,29 @@ Jev **cannot compute a price**. It returns typed values only, so the entry plan 
 
 ---
 
+## The web app
+
+```bash
+python3 serve.py            # http://127.0.0.1:8787, or the next free port
+```
+
+Three views over the same data, no build step and no dependencies:
+
+- **Deepdive** — one ticker, all 23 categories, the five Jev answers as probability bars, the
+  entry plan, and the prose state Jev was actually shown. A preview: it does not journal.
+- **Scan** — runs a scan and streams the real CLI output live. The funnel and the shortlist are
+  read from the same `evaluate()` path the CLI uses, not parsed out of stdout.
+- **Journal** — performance over a window, the equity curve in R, Jev's calibration by bucket, and
+  the watchlist cohort with what each name did after it was surfaced.
+
+Bound to `127.0.0.1` deliberately: this puts a trading decision surface and a key-spending client
+on your machine, and nothing needs it to be reachable from anywhere else. It falls forward to the
+next free port if the one you ask for is taken. Long work (a scan, a resolve) runs as a background
+subprocess with its output streamed into the page, so a one-minute scan is not a one-minute
+spinner.
+
+---
+
 ## Troubleshooting
 
 | symptom | cause |
@@ -171,6 +194,8 @@ Jev **cannot compute a price**. It returns typed values only, so the entry plan 
 | Yahoo stalls or 429s | Lower `--limit`; trading-tools caps polite fetching at 8 workers. |
 | `--since 7x` | Validated and rejected on purpose — a mistyped window used to match nothing, which reads exactly like "no trades that week". Use `all`, `Nd`, or `YYYY-MM-DD`. |
 | `UNKNOWN` status on the watchlist | No complete scan recorded yet. Run without a `--limit` that truncates the pool. |
+| `Address already in use` from `serve.py` | It now falls forward to the next free port and prints which one it got. Port 8787 is held by `caveman-proxy` on this machine, so expect 8788. |
+| SQLite "created in a thread" errors | Only if an old `store.py` is cached in a running process. Connections are thread-local now; restart whatever is running. |
 
 ---
 
@@ -185,6 +210,8 @@ Jev **cannot compute a price**. It returns typed values only, so the entry plan 
 | `jev.py` | the structured client and the five questions |
 | `store.py` | SQLite: `idx_daily`, `scan`, `decision`; `report()` and `watchlist()` |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `watchlist` · `analyze` |
+| `serve.py` | the local web app: deepdive, scan, journal |
+| `web/` | `index.html`, `app.css`, `app.js` — hand-written, no framework, no CDN |
 
 `.env` and `trading-jev.db` are gitignored. This app is local-only: no deploy target, no CI, no
 container. The git repo exists purely so you can `git diff` a strategy change.
@@ -208,5 +235,5 @@ What this means for reading it:
 - The entry plan uses the decision bar's close as the entry, not the next open. Slightly
   flattering; revisit when there is enough resolved history to see whether it matters.
 
-**Not here, and deliberately:** no broker integration, no web UI, no backtester. A signal and a
-journal is the whole product. Add a broker when the journal says the edge is real — not before.
+**Not here, and deliberately:** no broker integration, no backtester, no mobile app. A signal, a
+journal, and a way to read both. Add a broker when the journal says the edge is real — not before.

@@ -21,6 +21,7 @@ import decimal
 import json
 import os
 import sqlite3
+import threading
 
 DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trading-jev.db")
 
@@ -67,17 +68,27 @@ CREATE INDEX IF NOT EXISTS decision_session ON decision(session);
 CREATE INDEX IF NOT EXISTS decision_ticker ON decision(ticker);
 """
 
-_conn = None
+_local = threading.local()
 
 
 def conn():
-    global _conn
-    if _conn is None:
-        _conn = sqlite3.connect(DB)
-        _conn.row_factory = sqlite3.Row
-        _conn.executescript(SCHEMA)
-        _conn.commit()
-    return _conn
+    """One connection per thread.
+
+    A single module-level connection is a trap here: sqlite3 refuses to use a connection from a
+    thread other than the one that opened it, and serve.py is a ThreadingHTTPServer, so every
+    request arrives on a fresh thread. The first request worked and every one after it failed.
+    Thread-local avoids the whole class of problem, and WAL plus a busy timeout keeps concurrent
+    readers from tripping over each other."""
+    c = getattr(_local, "conn", None)
+    if c is None:
+        c = sqlite3.connect(DB)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=5000")
+        c.executescript(SCHEMA)
+        c.commit()
+        _local.conn = c
+    return c
 
 
 # ---------- IDX snapshot ----------
