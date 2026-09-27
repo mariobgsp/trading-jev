@@ -143,27 +143,41 @@ def render(candidate):
     decisive. Judge it on the journal, not on one pair. See MASTER_PLAN Q11.
     """
     t = candidate
-    rsi = t.get("rsi", 50.0)
-    obv = t.get("obv_slope_20d", 0.0)
-    ff = t.get("foreign_net_buy_20d_pct", 0.0)
-    gap = t.get("distance_to_significant_high_pct", 0.0)
+
+    def n(key, default=0.0):
+        """`.get(key, default)` only helps when the key is *absent*. candidate_state() reports a
+        genuinely missing input as None — a candidate with no significant high has no distance to
+        one — and that reached here as None and blew up on a comparison, crashing the whole run.
+        Coerce here instead."""
+        v = t.get(key)
+        return default if v is None else v
+
+    rsi = n("rsi", 50.0)
+    obv = n("obv_slope_20d", 0.0)
+    ff = n("foreign_net_buy_20d_pct", 0.0)
+    gap = n("distance_to_significant_high_pct", 0.0)
+    targets = t.get("targets_r") or [1, 2]
     rsi_word = "overbought" if rsi >= 70 else "oversold" if rsi <= 30 else "neutral"
     flow_word = "accumulation" if ff > 0 else "distribution" if ff < 0 else "flat foreign flow"
-    if gap <= 0.5:
+    if t.get("distance_to_significant_high_pct") is None:
+        # No pivot at all. Saying "at its last significant high" here would be a plain
+        # untruth fed to the model, so say what is actually true: there isn't one.
+        where = "with no confirmed significant high in range"
+    elif gap <= 0.5:
         where = "at its last confirmed significant high"
     elif gap < 0:
         where = f"{abs(gap):.1f}% ABOVE its last confirmed significant high"
     else:
         where = f"{gap:.1f}% below its last confirmed significant high"
     return (
-        f"{t.get('ticker', '?')} at {t.get('close', 0):,.0f} IDR, {where}. "
+        f"{t.get('ticker') or '?'} at {n('close'):,.0f} IDR, {where}. "
         f"RSI {rsi:.0f} ({rsi_word}). OBV slope {obv:+.2f} over 20 days "
         f"({'rising, volume confirming' if obv > 0 else 'falling'}). "
         f"Foreign net buy {ff:+.1f}% of float over 20 days ({flow_word}). "
-        f"Beta vs JKSE {t.get('beta_vs_jkse', 1.0):.1f}. "
-        f"Stop {t.get('stop_pct', 0):.1f}% below entry, targets at "
-        f"{', '.join(f'{x:g}R' for x in t.get('targets_r', [1, 2]))}. "
-        f"Recent news: {t.get('news', 'none tracked')}."
+        f"Beta vs JKSE {n('beta_vs_jkse', 1.0):.1f}. "
+        f"Stop {n('stop_pct'):.1f}% below entry, targets at "
+        f"{', '.join(f'{x:g}R' for x in targets)}. "
+        f"Recent news: {t.get('news') or 'none tracked'}."
     )
 
 
@@ -193,6 +207,17 @@ def check(answers):
 
 
 def demo():
+    # a candidate whose inputs are all absent must still render. candidate_state reports missing
+    # inputs as None, and a bug here once made every such candidate crash the whole run.
+    partial = dict(CANDIDATE, close=None, rsi=None, obv_slope_20d=None,
+                   foreign_net_buy_20d_pct=None, distance_to_significant_high_pct=None,
+                   stop_pct=None, targets_r=None, beta_vs_jkse=None, ticker=None)
+    assert "?" in render(partial), "a candidate with no ticker must render, not raise"
+    assert "no confirmed significant high" in render(partial), (
+        "a candidate with no pivot must say so, not claim it is at a significant high")
+    assert "at its last confirmed significant high" not in render(partial), (
+        "never assert a level the candidate does not have")
+
     prose = ask(render(CANDIDATE))
     check(prose["answers"])
     assert prose["usage"]["input_tokens"] > 0, f"no usage reported: {prose}"
