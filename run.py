@@ -9,10 +9,10 @@ snapshot — so they run before any Yahoo request. With 611 names under IDR 1,00
 what keeps the polite fetch count sane.
 
 Usage:
-  python3 run.py screen --limit 200       # universe -> shortlist, no API calls
+  python3 run.py screen --limit 200        # universe -> shortlist, no API calls
   python3 run.py run --limit 200 --top 15  # ...then ask Jev and journal every answer
-  python3 run.py resolve                  # fill outcomes for old ENTER decisions
-  python3 run.py accuracy                 # hit rate per p_enter bucket
+  python3 run.py resolve                   # fill outcomes for ENTER decisions
+  python3 run.py analyze --since 7d        # this week's performance; 30d, 90d, all
 """
 import argparse
 import concurrent.futures
@@ -26,6 +26,9 @@ from tools import bars_for
 
 MAX_WORKERS = 8          # trading-tools' README caps polite fetching at 8
 NEWS_WINDOW = 7
+# 6mo silently failed to score anything older than six months, because there were no bars left
+# reaching back to the session. Resolution needs history, not just recent data.
+RESOLVE_RANGE = "2y"
 
 
 def pre_gates(rows, sessions):
@@ -146,20 +149,34 @@ def screener_plan(code):
 
 
 def resolve():
+    """Score every ENTER that has no outcome yet. Returns a count so the caller can report
+    unresolvable ones instead of dropping them silently."""
     pending = store.unresolved()
     if not pending:
-        return print("nothing to resolve")
-    print(f"{len(pending)} ENTER decisions older than the last 10 sessions")
+        print("no ENTER decisions waiting on an outcome")
+        return 0, 0
+    done = stuck = 0
+    print(f"resolving {len(pending)} ENTER decisions (bars: {RESOLVE_RANGE})")
     for d in pending:
         try:
-            bars = bars_for(d["ticker"].replace(".JK", ""))
+            bars = bars_for(d["ticker"].replace(".JK", ""), RESOLVE_RANGE)
         except Exception as e:  # noqa: BLE001
-            print(f"  {d['ticker']}: {type(e).__name__}")
+            stuck += 1
+            print(f"  {d['ticker']:10} bars unavailable ({type(e).__name__}) — unresolvable")
             continue
         got = store.resolve(d["ticker"], d["session"], d["entry"], d["stop"], d["tp1"], bars)
-        if got:
-            store.set_outcome(d["id"], *got)
-            print(f"  {d['ticker']:10} {got[0]:5} {got[1]:+7.2f}% after {got[2]} bars")
+        if got is None:
+            stuck += 1
+            print(f"  {d['ticker']:10} session {d['session']} has no forward bars — unresolvable")
+            continue
+        store.set_outcome(d["id"], *got)
+        done += 1
+        print(f"  {d['ticker']:10} {got[0]:5} {got[1]:+7.2f}% after {got[2]} bars")
+    if stuck:
+        print(f"resolved {done}, UNRESOLVABLE {stuck} (these are never counted as wins or losses)")
+    else:
+        print(f"resolved {done}")
+    return done, stuck
 
 
 def main():
@@ -171,13 +188,25 @@ def main():
         p.add_argument("--top", type=int, default=15, help="max to send to Jev")
         p.add_argument("--news", action="store_true", help="also score news (1 request per ticker)")
     sub.add_parser("resolve")
-    sub.add_parser("accuracy")
+    an = sub.add_parser("analyze")
+    an.add_argument("--since", default="all", help="all | 7d | 30d | 90d | YYYY-MM-DD")
+    an.add_argument("--no-resolve", action="store_true", help="skip resolving pending outcomes")
+    an.add_argument("--short", action="store_true", help="omit the per-decision list")
     a = ap.parse_args()
 
     if a.cmd == "resolve":
-        return resolve()
-    if a.cmd == "accuracy":
-        return store.accuracy()
+        resolve()          # prints its own counts; its tuple is data, not an exit code
+        return 0
+    if a.cmd == "analyze":
+        try:
+            since = store.since_ts(a.since)
+        except ValueError as e:
+            print(e)
+            return 2
+        if not a.no_resolve:
+            resolve()
+            print()
+        return store.print_report(store.report(since), per_decision=not a.short)
     if a.cmd not in ("screen", "run"):
         return ap.print_help()
 
@@ -191,7 +220,8 @@ def main():
               f"{','.join(v['rank_signals'])}")
     if a.cmd == "run":
         n = ask_jev(session, passed, a.top)
-        print(f"journalled {n} decisions (session {session}) — `run.py accuracy` scores them")
+        print(f"journalled {n} decisions (session {session}) — "
+              f"`run.py analyze --since 7d` scores them")
 
 
 if __name__ == "__main__":

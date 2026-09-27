@@ -16,6 +16,8 @@ Usage:
   python3 store.py accuracy      # hit rate per p_enter bucket — the metric that keeps or kills Jev
 """
 import calendar
+import datetime
+import decimal
 import json
 import os
 import sqlite3
@@ -135,23 +137,29 @@ def record(session, ticker, rendered, answers, action, plan, evidence):
     db.commit()
 
 
-def unresolved(min_age_sessions=10):
+def unresolved():
+    """Every ENTER with no outcome yet, of any age.
+
+    Deliberately not age-filtered. A session-count gate looks tidier but breaks the obvious
+    workflow — after one week only ~5 sessions exist, so nothing would ever resolve. resolve()
+    already returns 'open' when too few bars have passed, which is the honest answer, so the
+    caller can resolve everything and let the outcome say how old the trade really is."""
     return [dict(r) for r in conn().execute(
-        "SELECT * FROM decision WHERE action='ENTER' AND outcome IS NULL"
-        " AND session NOT IN (SELECT day FROM idx_daily ORDER BY day DESC LIMIT ?)",
-        (min_age_sessions,))]
+        "SELECT * FROM decision WHERE action='ENTER' AND outcome IS NULL ORDER BY session")]
 
 
 def resolve(ticker, session, entry, stop, tp1, bars):
-    """-> (outcome, pct, bars_held). Walks forward from the session bar; the first of stop or
-    tp1 decides, otherwise it is still open at the last bar we hold. Uses only bars that existed
-    after the session, so a decision is never scored against its own past."""
+    """-> (outcome, pct, bars_held). Walks forward from the bar AFTER the session: the plan is
+    built on the session's close, so that bar can neither stop us out nor take profit. The first
+    of stop or tp1 after it decides, otherwise the trade is still open at the last bar we hold.
+    Uses only bars that existed after the session, so a decision is never scored against its own
+    past."""
     start = None
     for i, b in enumerate(bars):
         if b["t"] >= session_ts(session):
-            start = i
+            start = i + 1          # never count the entry bar against the trade
             break
-    if start is None:
+    if start is None or start >= len(bars):
         return None
     for j in range(start, len(bars)):
         b = bars[j]
@@ -170,29 +178,129 @@ def set_outcome(decision_id, outcome, pct, bars):
     conn().commit()
 
 
-def accuracy(step=0.1):
-    """Hit rate per p_enter bucket, plus the veto rate. The metric that decides whether Jev
-    stays: if the high-probability buckets are no better than the low ones, the model is noise
-    and the correct response is to delete layer 3."""
-    agg = {}
-    for r in conn().execute(
-            "SELECT CAST(p_enter / ? AS INT) AS bucket, outcome, COUNT(*) n FROM decision"
-            " WHERE outcome IS NOT NULL AND outcome <> 'open' GROUP BY bucket, outcome",
-            (step,)):
-        b = agg.setdefault(r["bucket"], {"n": 0, "wins": 0})
-        b["n"] += r["n"]
-        b["wins"] += r["n"] if r["outcome"] == "tp1" else 0
-    total = conn().execute("SELECT COUNT(*) FROM decision").fetchone()[0]
-    if not total:
-        print("nothing scored yet")
-        return
-    entered = conn().execute("SELECT COUNT(*) FROM decision WHERE action='ENTER'").fetchone()[0]
-    print(f"{'bucket':>8} {'n':>5} {'wins':>5} {'rate':>7}")
-    for b in sorted(agg):
-        v = agg[b]
-        print(f"{b * step:8.1f} {v['n']:5d} {v['wins']:5d} {v['wins'] / v['n']:7.1%}")
-    print(f"\nscored {total}, entered {entered} ({entered / total:.1%}), "
-          f"vetoed {total - entered} ({1 - entered / total:.1%})")
+def since_ts(value):
+    """'all'/None -> None (no filter). '30d'/'7d' -> that many days back, in UTC to match run_ts,
+    which SQLite writes as datetime('now'). YYYY-MM-DD -> that midnight.
+
+    Validated strictly. Anything else raises: a mistyped window used to compare as a string and
+    silently match nothing, which reads exactly like 'no trades that week'."""
+    if not value or value == "all":
+        return None
+    text = str(value).strip()
+    bad = ValueError(f"--since wants 'all', '7d'/'30d'/'90d', or YYYY-MM-DD, got {value!r}")
+    if text.endswith("d"):
+        try:
+            days = int(text[:-1])
+        except ValueError as e:
+            raise bad from e
+        if days <= 0:
+            raise bad
+        back = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        return back.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        datetime.datetime.strptime(text, "%Y-%m-%d")
+    except ValueError as e:
+        raise bad from e
+    return text + " 00:00:00"
+
+
+def risk_pct(d):
+    """Risk of one trade as a percentage, from the plan that was stored with it. This is the
+    denominator for R: without it a % return is not comparable between a 3% stop and a 9% one."""
+    if not d.get("entry") or not d.get("stop"):
+        return None
+    return abs(d["entry"] - d["stop"]) / d["entry"] * 100
+
+
+def report(since=None, step=0.1):
+    """Everything the journal knows about a window, in one pass.
+
+    `open` and `unresolvable` are reported as their own counts, never folded into the win rate.
+    An earlier version dropped 'open' silently, which flatters the hit rate by quietly removing
+    the trades that have not proved themselves yet."""
+    if since:
+        rows = [dict(r) for r in conn().execute(
+            "SELECT * FROM decision WHERE run_ts >= ? ORDER BY run_ts, id", (since,))]
+    else:
+        rows = [dict(r) for r in conn().execute("SELECT * FROM decision ORDER BY run_ts, id")]
+
+    entered = [d for d in rows if d["action"] == "ENTER"]
+    decided = [d for d in entered if d["outcome"] in ("tp1", "stop")]
+    still_open = [d for d in entered if d["outcome"] == "open"]
+    unresolvable = [d for d in entered if d["outcome"] is None]
+
+    buckets = {}
+    for d in decided:
+        # Decimal, not float. p_enter 0.7/0.1 is 6.999... in binary floating point and 0.75/0.1
+        # is exactly 7.5, so int() files 0.7 under 0.6 and round() (banker's rounding) files 0.75
+        # under 0.8. No single rounding mode fixes both — the division itself is the problem.
+        # Decimal on the string form is exact: 0.7->7, 0.75->7, 0.45->4, all lower-bound buckets.
+        idx = int(decimal.Decimal(str(d["p_enter"] or 0))
+                  // decimal.Decimal(str(step)))
+        b = buckets.setdefault(idx, {"n": 0, "wins": 0})
+        b["n"] += 1
+        b["wins"] += 1 if d["outcome"] == "tp1" else 0
+
+    curve, cum = [], 0.0
+    for d in entered:
+        r = risk_pct(d)
+        if d["outcome"] and r:
+            cum += d["outcome_pct"] / r
+        curve.append({"session": d["session"], "ticker": d["ticker"],
+                      "outcome": d["outcome"], "pct": d["outcome_pct"],
+                      "r": round(d["outcome_pct"] / r, 2) if d["outcome"] and r else None,
+                      "cumulative_r": round(cum, 2)})
+
+    return {
+        "since": since or "all time",
+        "scored": len(rows),
+        "entered": len(entered),
+        "vetoed": len(rows) - len(entered),
+        "veto_rate": (len(rows) - len(entered)) / len(rows) if rows else None,
+        "resolved": len(decided),
+        "wins": sum(1 for d in decided if d["outcome"] == "tp1"),
+        "hit_rate": (sum(1 for d in decided if d["outcome"] == "tp1") / len(decided))
+                    if decided else None,
+        "open": len(still_open),
+        "unresolvable": len(unresolvable),
+        "total_r": round(cum, 2),
+        "avg_r": round(cum / len(curve), 2) if curve else None,
+        "buckets": sorted((round(b * step, 1), v["n"], v["wins"]) for b, v in buckets.items()),
+        "equity": curve,
+        "decisions": [{"session": d["session"], "ticker": d["ticker"], "action": d["action"],
+                       "p_enter": d["p_enter"], "conviction": d["conviction"],
+                       "risk": d["risk"], "outcome": d["outcome"],
+                       "outcome_pct": d["outcome_pct"]} for d in rows],
+    }
+
+
+def print_report(rep, per_decision=True):
+    print(f"window: {rep['since']}")
+    print(f"scored {rep['scored']}  entered {rep['entered']}  vetoed {rep['vetoed']}"
+          + (f" ({rep['veto_rate']:.1%})" if rep["veto_rate"] is not None else ""))
+    hr = "n/a" if rep["hit_rate"] is None else f"{rep['hit_rate']:.1%} ({rep['wins']}/{rep['resolved']})"
+    print(f"resolved {rep['resolved']}  hit rate {hr}  open {rep['open']}  "
+          f"unresolvable {rep['unresolvable']}")
+    print(f"R: total {rep['total_r']:+.2f}  avg {rep['avg_r'] if rep['avg_r'] is not None else 'n/a'}")
+    if not rep["entered"]:
+        print("\nno ENTER in this window, so there is no P&L. Jev vetoed everything it saw.")
+    if rep["buckets"]:
+        print("\nJev calibration by p_enter bucket:")
+        print(f"  {'bucket':>8} {'n':>5} {'wins':>5} {'rate':>7}")
+        for b, n, w in rep["buckets"]:
+            print(f"  {b:8.1f} {n:5d} {w:5d} {w / n:7.1%}")
+    if rep["equity"]:
+        print("\nequity (cumulative R):")
+        for row in rep["equity"]:
+            pct = "  n/a" if row["pct"] is None else f"{row['pct']:+7.2f}%"
+            print(f"  {row['session']}  {row['ticker']:8} {str(row['outcome'] or 'unresolved'):10}"
+                  f"{pct}  R={str(row['r']):>6}  cum={row['cumulative_r']:+.2f}")
+    if per_decision and rep["decisions"]:
+        print("\ndecisions:")
+        print(f"  {'session':<9} {'ticker':8} {'act':5} {'p':>5} {'conv':>5} {'risk':7} outcome")
+        for d in rep["decisions"]:
+            print(f"  {d['session']:<9} {d['ticker']:8} {d['action']:5} {d['p_enter']:5.2f} "
+                  f"{d['conviction']:5.1f} {str(d['risk']):7} {d['outcome'] or '-'}")
 
 
 def session_ts(session):
@@ -205,4 +313,4 @@ def session_ts(session):
 
 
 if __name__ == "__main__":
-    accuracy()
+    print_report(report())

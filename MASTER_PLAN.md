@@ -208,19 +208,24 @@ Not a broker. No orders are placed. Every run writes decisions; a human presses 
 | `tools.py` | the single owner of the trading-tools dependency (loaded by path) |
 | `pivots.py` | significant highs and lows, `breakout`, `hh_breakout`, `lower_low`; self-check proves no repainting |
 | `idx.py` | `GetStockSummary` over stdlib http.client — universe, suspended filter, float, foreign flow |
-| `store.py` | SQLite: `idx_daily` (also the 24h cache) and `decision` (the journal), plus `accuracy()` |
+| `store.py` | SQLite: `idx_daily` (also the 24h cache) and `decision` (the journal), plus `report()` |
 | `screen.py` | the 21 categories, the required gate, the rank score |
 | `jev.py` | the the structured endpoint client and the 5 typed questions |
-| `run.py` | the pipeline: `screen` · `run` · `resolve` · `accuracy` |
+| `run.py` | the pipeline: `screen` · `run` · `resolve` · `analyze` |
 
 ```bash
 python3 run.py screen --limit 200        # universe -> shortlist, no API calls
 python3 run.py run --limit 200 --top 15  # ...then ask Jev and journal every answer
-python3 run.py resolve                   # fill outcomes for old ENTER decisions
-python3 run.py accuracy                  # hit rate per p_enter bucket
+python3 run.py analyze --since 7d        # this week; 30d, 90d, all, or YYYY-MM-DD
+python3 run.py resolve                   # just refill outcomes
 python3 pivots.py demo                   # no network
 python3 jev.py demo                      # one real call
 ```
+
+`analyze` resolves anything pending, then reports over the window: scored / entered / vetoed,
+hit rate, cumulative R and an equity curve, Jev's calibration by `p_enter` bucket, and the
+per-decision list. **R, not percent**, because a 3% stop and a 9% stop make a +4% move different
+trades; R divides by the risk that was actually planned.
 
 **Measured funnel, session 20260925:** 963 listed → 804 tradable (159 suspended) → 611 under
 IDR 1,000 → 233 with foreign buying → 231 scored → **11 cleared the required gate** → 11 asked,
@@ -242,3 +247,29 @@ ABBA and ABDA. Filtering on it deletes two thirds of the market.
   system, and the one `trading-cli` says matters most. The window grows automatically as
   `idx_daily` accumulates, so re-check the gate once ~20 sessions exist.
 - Whether one required gate is too loose or too tight. The shortlist was 11 names on day one.
+- The entry plan uses the **decision bar's close** as the entry, not the next open. Realistic
+  enough for a swing system, but it flatters results slightly, because in practice you cannot
+  fill at a close you only saw at 16:00. Revisit when there is enough resolved history to see
+  whether it matters.
+- Only one session is stored (20260925), so the foreign-flow gate is a single day and the whole
+  journal is one session deep. Everything time-windowed needs a few weeks before it says
+  anything.
+
+## Three silent bugs, found and fixed
+
+Recorded because each one failed *quietly* rather than loudly:
+
+1. **`resolve` could never score anything a week old.** It gated on "not among the last 10 stored
+   sessions", but a week is ~5 sessions — so the obvious workflow (analyze next week) would
+   always have found nothing to score. The gate is gone: `resolve` now attempts everything and
+   reports `open` when too few bars have passed, which is the truthful answer.
+2. **Trades older than 6 months were silently unscorable.** Resolution fetched a `6mo` range, so
+   a decision from last spring had no bars reaching back to its session and was dropped. It now
+   fetches `2y`, and anything still unresolvable is counted and printed rather than skipped.
+3. **`accuracy` dropped open trades from the hit rate.** Flattering by construction — the
+   unproven trades vanished. `open` and `unresolvable` are now their own counts.
+
+Also fixed: the walk started *on* the entry bar, so a trade could be stopped out on the bar it
+was entered from. Entry is at that bar's close, so the walk now starts after it. Proven by
+differential test against an independent walk, and `p_enter` buckets are bucketed with `Decimal`
+because `0.75/0.1` is exactly `7.5` in binary floating point and lands in the wrong bucket.
