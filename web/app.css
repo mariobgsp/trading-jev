@@ -3,18 +3,25 @@
 
 :root {
   --bg:        #f5f5f6;
-  --surface:   #ffffff;
+  --surface:   var(--paper);
   --ink:       #0a0a0b;
   --ink-2:     #55555c;
   --ink-3:     #8d8d96;
-  --hair:      rgba(10, 10, 11, .075);
-  --hair-2:    rgba(10, 10, 11, .13);
+  --hair:      color-mix(in srgb, var(--ink) 7.5%, transparent);
+  --hair-2:    color-mix(in srgb, var(--ink) 13%, transparent);
   --enter:     #0f6e52;
   --enter-bg:  rgba(15, 110, 82, .09);
   --skip:      #9a3b2f;
   --skip-bg:   rgba(154, 59, 47, .08);
-  --shadow:    0 1px 2px rgba(10,10,11,.035), 0 10px 30px -12px rgba(10,10,11,.13);
-  --shadow-lg: 0 2px 4px rgba(10,10,11,.04), 0 24px 60px -20px rgba(10,10,11,.20);
+  /* the light end of the scale, for glass and inset highlights; inverted in dark mode */
+  --paper:     #ffffff;
+  --enter-hair:  rgba(15, 110, 82, .16);
+  --enter-hair-2: rgba(15, 110, 82, .28);
+  /* the two ground orbs behind everything */
+  --tint-a:    rgba(255, 255, 255, .95);
+  --tint-b:    rgba(226, 232, 240, .55);
+  --shadow:    0 1px 2px color-mix(in srgb, var(--ink) 3.5%, transparent), 0 10px 30px -12px color-mix(in srgb, var(--ink) 13%, transparent);
+  --shadow-lg: 0 2px 4px color-mix(in srgb, var(--ink) 4%, transparent), 0 24px 60px -20px color-mix(in srgb, var(--ink) 20%, transparent);
   --ease:      cubic-bezier(.32, .72, 0, 1);
   /* Motion contract. Every duration here was already written as a literal in this file; these
      tokens take those exact values, so introducing them changed no computed transition. Role
@@ -32,6 +39,31 @@
   --r-core:    calc(2rem - 7px);
   --sans: ui-sans-serif, system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", monospace;
+}
+
+/* ── dark mode ────────────────────────────────────────────────────────────
+   The whole palette inverts, and nothing else changes: every tint in this file is a
+   color-mix() against --ink or --paper, so the alpha values carry over untouched.
+   Shadows get deeper and the orbs get darker, because a light-mode shadow on a dark
+   surface is invisible. */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:        #0b0b0d;
+  --surface:   #151518;
+  --paper:     #1c1c21;
+  --ink:       #f3f3f5;
+  --ink-2:     #a9a9b2;
+  --ink-3:     #77777f;
+  --enter:     #4fd3a8;
+  --enter-bg:  rgba(79, 211, 168, .12);
+  --enter-hair:  rgba(79, 211, 168, .22);
+  --enter-hair-2: rgba(79, 211, 168, .40);
+  --skip:      #ef8b80;
+  --skip-bg:   rgba(239, 139, 128, .12);
+  --shadow:    0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -12px rgba(0, 0, 0, .62);
+  --shadow-lg: 0 2px 4px rgba(0, 0, 0, .55), 0 24px 60px -20px rgba(0, 0, 0, .7);
+  --tint-a:    rgba(52, 58, 78, .5);
+  --tint-b:    rgba(20, 22, 30, .8);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -52,8 +84,8 @@ body {
 body::before {
   content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
   background:
-    radial-gradient(70rem 40rem at 12% -8%, rgba(255,255,255,.95), transparent 60%),
-    radial-gradient(52rem 34rem at 92% 4%, rgba(226,232,240,.55), transparent 62%);
+    radial-gradient(70rem 40rem at 12% -8%, color-mix(in srgb, var(--paper) 95%, transparent), transparent 60%),
+    radial-gradient(52rem 34rem at 92% 4%, var(--tint-b), transparent 62%);
 }
 
 .num { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
@@ -65,7 +97,7 @@ body::before {
   display: flex; align-items: center; gap: .35rem;
   padding: .4rem .45rem .4rem 1.1rem;
   border-radius: 999px;
-  background: rgba(255,255,255,.72);
+  background: color-mix(in srgb, var(--paper) 72%, transparent);
   backdrop-filter: blur(20px) saturate(1.6);
   -webkit-backdrop-filter: blur(20px) saturate(1.6);
   box-shadow: inset 0 0 0 1px var(--hair), var(--shadow);
@@ -77,8 +109,8 @@ body::before {
   padding: .5rem .95rem; border-radius: 999px;
   transition: color var(--dur-move) var(--ease), background-color var(--dur-move) var(--ease);
 }
-.nav a:hover { color: var(--ink); background: rgba(10,10,11,.045); }
-.nav a.on { color: var(--ink); background: rgba(10,10,11,.075); }
+.nav a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 4.5%, transparent); }
+.nav a.on { color: var(--ink); background: color-mix(in srgb, var(--ink) 7.5%, transparent); }
 
 /* ── layout ──────────────────────────────────────────────────────────────── */
 main { position: relative; z-index: 1; padding: 0 clamp(1.25rem, 5vw, 4.5rem) 8rem; }
@@ -89,7 +121,7 @@ section { padding: clamp(3.5rem, 7vw, 6.5rem) 0 0; scroll-margin-top: 6rem; }
   padding: .3rem .8rem; border-radius: 999px;
   font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .2em;
   color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--hair);
-  background: rgba(255,255,255,.6);
+  background: color-mix(in srgb, var(--paper) 60%, transparent);
 }
 h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); font-weight: 640; letter-spacing: -.038em; line-height: 1.03; margin: 1.1rem 0 .6rem; }
 .lede { color: var(--ink-2); max-width: 46ch; font-size: 1rem; }
@@ -102,14 +134,14 @@ h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); font-weight: 640; letter-spacing: -.
 
 /* ── double bezel: a machined plate in a tray ─────────────────────────────── */
 .shell {
-  background: rgba(10,10,11,.028); padding: 7px;
+  background: color-mix(in srgb, var(--ink) 2.8%, transparent); padding: 7px;
   border-radius: var(--r-shell);
   box-shadow: inset 0 0 0 1px var(--hair);
 }
 .core {
   height: 100%; background: var(--surface); border-radius: var(--r-core);
   padding: clamp(1.35rem, 2.1vw, 1.9rem);
-  box-shadow: var(--shadow), inset 0 1px 1px rgba(255,255,255,.9);
+  box-shadow: var(--shadow), inset 0 1px 1px color-mix(in srgb, var(--paper) 90%, transparent);
 }
 .core.tight { padding: 1.1rem 1.25rem; }
 .core h3 { font-size: .95rem; font-weight: 600; letter-spacing: -.02em; margin-bottom: .2rem; }
@@ -119,7 +151,7 @@ h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); font-weight: 640; letter-spacing: -.
 .btn {
   display: inline-flex; align-items: center; gap: .8rem;
   padding: .78rem .8rem .78rem 1.4rem; border: 0; cursor: pointer;
-  border-radius: 999px; background: var(--ink); color: #fff;
+  border-radius: 999px; background: var(--ink); color: var(--paper);
   font: inherit; font-size: .84rem; font-weight: 540; letter-spacing: -.01em;
   transition: transform var(--dur-move) var(--ease), opacity var(--dur-move) var(--ease), box-shadow var(--dur-move) var(--ease);
 }
@@ -127,38 +159,38 @@ h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); font-weight: 640; letter-spacing: -.
 .btn:not(:disabled):active { transform: scale(.985); }
 .btn-ico {
   width: 1.85rem; height: 1.85rem; border-radius: 999px; display: grid; place-items: center;
-  background: rgba(255,255,255,.16); font-size: .8rem; line-height: 1;
+  background: color-mix(in srgb, var(--paper) 16%, transparent); font-size: .8rem; line-height: 1;
   transition: transform var(--dur-move) var(--ease), background-color var(--dur-move) var(--ease);
 }
-.btn:not(:disabled):hover .btn-ico { transform: translate(4px,-2px) scale(1.06); background: rgba(255,255,255,.24); }
-.btn.ghost { background: rgba(10,10,11,.05); color: var(--ink); box-shadow: inset 0 0 0 1px var(--hair); }
-.btn.ghost .btn-ico { background: rgba(10,10,11,.07); }
-.btn.ghost:not(:disabled):hover .btn-ico { background: rgba(10,10,11,.12); }
+.btn:not(:disabled):hover .btn-ico { transform: translate(4px,-2px) scale(1.06); background: color-mix(in srgb, var(--paper) 24%, transparent); }
+.btn.ghost { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); box-shadow: inset 0 0 0 1px var(--hair); }
+.btn.ghost .btn-ico { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.btn.ghost:not(:disabled):hover .btn-ico { background: color-mix(in srgb, var(--ink) 12%, transparent); }
 
 .field { display: flex; align-items: center; gap: .6rem; }
 input[type=text] {
   flex: 1; min-width: 0; font: inherit; font-size: .95rem; font-weight: 560; letter-spacing: .02em;
   text-transform: uppercase; color: var(--ink);
   padding: .8rem 1.15rem; border: 0; border-radius: 999px;
-  background: rgba(10,10,11,.045); box-shadow: inset 0 0 0 1px var(--hair);
+  background: color-mix(in srgb, var(--ink) 4.5%, transparent); box-shadow: inset 0 0 0 1px var(--hair);
   transition: box-shadow var(--dur-move) var(--ease), background-color var(--dur-move) var(--ease);
 }
-input[type=text]:focus { outline: none; background: #fff; box-shadow: inset 0 0 0 1.5px var(--hair-2), var(--shadow); }
+input[type=text]:focus { outline: none; background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--hair-2), var(--shadow); }
 input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--ink-3); font-weight: 450; }
 
 .pills { display: flex; flex-wrap: wrap; gap: .4rem; }
 .pill {
   font: inherit; font-size: .76rem; font-weight: 520; color: var(--ink-2); cursor: pointer;
   padding: .45rem .9rem; border: 0; border-radius: 999px;
-  background: rgba(10,10,11,.045); box-shadow: inset 0 0 0 1px transparent;
+  background: color-mix(in srgb, var(--ink) 4.5%, transparent); box-shadow: inset 0 0 0 1px transparent;
   transition: color var(--dur-quick) var(--ease), background-color var(--dur-quick) var(--ease), box-shadow var(--dur-quick) var(--ease);
 }
 .pill:hover { color: var(--ink); }
-.pill.on { color: var(--ink); background: #fff; box-shadow: inset 0 0 0 1px var(--hair), var(--shadow); }
+.pill.on { color: var(--ink); background: var(--paper); box-shadow: inset 0 0 0 1px var(--hair), var(--shadow); }
 
 /* ── figures ─────────────────────────────────────────────────────────────── */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: .7rem; }
-.tile { padding: .95rem 1.05rem; border-radius: 1.15rem; background: rgba(10,10,11,.032); box-shadow: inset 0 0 0 1px var(--hair); }
+.tile { padding: .95rem 1.05rem; border-radius: 1.15rem; background: color-mix(in srgb, var(--ink) 3.2%, transparent); box-shadow: inset 0 0 0 1px var(--hair); }
 .tile .k { font-size: .66rem; text-transform: uppercase; letter-spacing: .16em; color: var(--ink-3); font-weight: 600; }
 .tile .v { font-size: 1.55rem; font-weight: 600; letter-spacing: -.04em; margin-top: .3rem; }
 .tile .n { font-size: .72rem; color: var(--ink-3); }
@@ -166,11 +198,11 @@ input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--
 .verdict { display: inline-flex; align-items: center; gap: .55rem; padding: .45rem 1rem .45rem 1.1rem; border-radius: 999px; font-size: .8rem; font-weight: 600; letter-spacing: -.01em; }
 .verdict.enter { background: var(--enter-bg); color: var(--enter); }
 .verdict.skip  { background: var(--skip-bg);  color: var(--skip); }
-.verdict.none  { background: rgba(10,10,11,.05); color: var(--ink-3); }
+.verdict.none  { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink-3); }
 .dot { width: .45rem; height: .45rem; border-radius: 999px; background: currentColor; }
 
 /* a probability bar — the shape of Jev's confidence */
-.pbar { height: .3rem; border-radius: 999px; background: rgba(10,10,11,.07); overflow: hidden; }
+.pbar { height: .3rem; border-radius: 999px; background: color-mix(in srgb, var(--ink) 7%, transparent); overflow: hidden; }
 .pbar > i { display: block; height: 100%; border-radius: 999px; background: var(--ink); transform-origin: left; transform: scaleX(0); transition: transform var(--dur-bar) var(--ease); }
 .in .pbar > i, .shown .pbar > i { transform: scaleX(var(--v, 0)); }
 
@@ -184,13 +216,13 @@ input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--
 .chips { display: flex; flex-wrap: wrap; gap: .35rem; }
 .chip {
   font-size: .72rem; font-weight: 520; padding: .34rem .7rem; border-radius: 999px;
-  background: rgba(10,10,11,.04); color: var(--ink-3);
+  background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-3);
   box-shadow: inset 0 0 0 1px transparent;
   transition: transform var(--dur-quick) var(--ease), color var(--dur-quick) var(--ease), background-color var(--dur-quick) var(--ease);
 }
-.chip.on { background: var(--enter-bg); color: var(--enter); box-shadow: inset 0 0 0 1px rgba(15,110,82,.16); }
+.chip.on { background: var(--enter-bg); color: var(--enter); box-shadow: inset 0 0 0 1px var(--enter-hair); }
 .chip.gate { box-shadow: inset 0 0 0 1px var(--hair-2); color: var(--ink); font-weight: 600; }
-.chip.gate.on { box-shadow: inset 0 0 0 1px rgba(15,110,82,.28); }
+.chip.gate.on { box-shadow: inset 0 0 0 1px var(--enter-hair-2); }
 
 table { width: 100%; border-collapse: collapse; }
 th {
@@ -200,24 +232,21 @@ th {
 td { padding: .62rem .8rem .62rem 0; border-top: 1px solid var(--hair); font-size: .85rem; }
 td.n, th.n { text-align: right; padding-right: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 tbody tr { transition: background-color var(--dur-row) var(--ease); }
-tbody tr:hover { background: rgba(10,10,11,.022); }
+tbody tr:hover { background: color-mix(in srgb, var(--ink) 2.2%, transparent); }
 .pos { color: var(--enter); } .neg { color: var(--skip); }
 .scroll { overflow-x: auto; }
 
 /* ── watchlist refresh ─────────────────────────────────────────────────────
-   A rotation of the existing icon disc, in flight only. The table is usually already
-   populated, so a skeleton would imply data is arriving when nothing is being computed. */
-@keyframes disc-spin { to { transform: rotate(360deg); } }
-.btn.is-busy .btn-ico { animation: disc-spin var(--dur-bar) linear infinite; }
-.btn.is-busy { cursor: progress; }
-/* prefers-reduced-motion already sets `animation: none` globally, so the spin is covered. */
+/* The watchlist refresh icon no longer spins: a constant-velocity rotation needs `linear`,
+   which the motion contract bans. It now uses the `breathe` keyframe declared with the rest of
+   the loading treatment, so the indicator obeys the same curve as everything else. */
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .card-head h3 { margin-bottom: .2rem; }
 #cohort-note { margin: 0 0 .9rem; min-height: 1.1em; }
 
 pre.log {
   font-family: var(--mono); font-size: .74rem; line-height: 1.7; color: var(--ink-2);
-  background: rgba(10,10,11,.035); border-radius: 1.15rem; padding: 1.1rem 1.2rem;
+  background: color-mix(in srgb, var(--ink) 3.5%, transparent); border-radius: 1.15rem; padding: 1.1rem 1.2rem;
   max-height: 17rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
   box-shadow: inset 0 0 0 1px var(--hair);
 }
@@ -227,10 +256,52 @@ pre.log:empty::after { content: "no output yet"; color: var(--ink-3); }
 .small { font-size: .78rem; }
 .prose {
   font-size: .8rem; line-height: 1.7; color: var(--ink-2);
-  background: rgba(10,10,11,.03); border-radius: 1.15rem; padding: 1rem 1.15rem;
+  background: color-mix(in srgb, var(--ink) 3%, transparent); border-radius: 1.15rem; padding: 1rem 1.15rem;
   box-shadow: inset 0 0 0 1px var(--hair);
 }
 .prose b { color: var(--ink); font-weight: 600; }
+
+/* ── loading ───────────────────────────────────────────────────────────────
+   A looping indicator that does NOT use linear: an infinite rotation needs constant
+   velocity, but `linear` is banned and `ease-in-out` pulses visibly, so the icon
+   breathes on the project's own curve instead. transform/opacity only, throughout. */
+@keyframes breathe { from { transform: scale(.86); opacity: .68; } to { transform: scale(1); opacity: 1; } }
+.btn.is-busy .btn-ico { animation: breathe var(--dur-bar) var(--ease) infinite alternate; }
+.btn.is-busy { cursor: progress; }
+
+.sweep {
+  position: relative; height: 2px; border-radius: 999px; overflow: hidden; margin-bottom: .9rem;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  opacity: 0; transition: opacity var(--dur-quick) var(--ease);
+}
+body[data-busy] .sweep { opacity: 1; }
+.sweep::after {
+  content: ""; position: absolute; inset-block: 0; left: 0; width: 42%;
+  border-radius: inherit; transform: translateX(-110%);
+  background: linear-gradient(90deg, transparent, var(--ink-3), transparent);
+  animation: sweep var(--dur-bar) var(--ease) infinite;
+}
+@keyframes sweep { to { transform: translateX(340%); } }
+
+@keyframes pulse { from { opacity: .4; } to { opacity: 1; } }
+.skel {
+  height: .75rem; border-radius: 999px; margin-bottom: .55rem;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  animation: pulse calc(var(--dur-bar) * 1.2) var(--ease) infinite alternate;
+}
+.skel.w-40 { width: 40%; } .skel.w-60 { width: 60%; } .skel.w-80 { width: 80%; }
+
+/* theme toggle */
+.nav-theme {
+  margin-left: .35rem; width: 2.1rem; height: 2.1rem; display: grid; place-items: center;
+  border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-size: .95rem;
+  line-height: 1; color: var(--ink-2);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  transition: transform var(--dur-move) var(--ease), color var(--dur-move) var(--ease),
+              background-color var(--dur-move) var(--ease);
+}
+.nav-theme:hover { color: var(--ink); transform: scale(1.06); }
+.nav-theme:active { transform: scale(.95); }
 
 .empty { color: var(--ink-3); font-size: .85rem; padding: 1.5rem 0; }
 .err { color: var(--skip); font-size: .85rem; padding: 1rem 0; }

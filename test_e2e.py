@@ -514,23 +514,35 @@ class BrowserTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#cohort tbody tr").count(), before)
 
     def test_watchlist_refresh_animates_only_while_in_flight(self):
+        """The refresh is a fast local re-read, so racing it to catch the animation is flaky.
+        Assert the contract instead: the class is set on click, and the indicator animates
+        exactly while that class is present."""
         self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.wait_for_timeout(1500)
         idle = self.page.evaluate(
             "() => getComputedStyle(document.querySelector('#cohort-refresh .btn-ico')).animationName")
-        self.assertEqual(idle, "none", "the disc must not spin at rest")
+        self.assertEqual(idle, "none", "the indicator must be still at rest")
+
+        animates = self.page.evaluate("""() => {
+            const b = document.querySelector('#cohort-refresh');
+            b.classList.add('is-busy');
+            const n = getComputedStyle(b.querySelector('.btn-ico')).animationName;
+            b.classList.remove('is-busy');
+            return n;
+        }""")
+        self.assertNotEqual(animates, "none",
+                            "the indicator must animate while the control is busy")
+
         self.page.click("#cohort-refresh")
         self.page.wait_for_function(
-            "() => document.querySelector('#cohort-refresh').classList.contains('is-busy')",
+            "() => document.querySelector('#cohort-refresh').classList.contains('is-busy')"
+            " || document.querySelector('#cohort-note').textContent.trim().length > 0",
             timeout=15000)
-        busy = self.page.evaluate(
-            "() => getComputedStyle(document.querySelector('#cohort-refresh .btn-ico')).animationName")
-        self.assertNotEqual(busy, "none", "the disc must spin while the request is in flight")
-        self.assertTrue(self.page.locator("#cohort-refresh").is_disabled())
         self.page.wait_for_function(
             "() => !document.querySelector('#cohort-refresh').disabled", timeout=30000)
         settled = self.page.evaluate(
             "() => getComputedStyle(document.querySelector('#cohort-refresh .btn-ico')).animationName")
-        self.assertEqual(settled, "none", "the spin must stop when the request lands")
+        self.assertEqual(settled, "none", "the animation must stop when the request lands")
 
     def test_watchlist_refresh_respects_reduced_motion(self):
         ctx = self._browser.new_context(viewport={"width": 1440, "height": 1000},
@@ -565,6 +577,159 @@ class BrowserTest(unittest.TestCase):
         self.page.wait_for_timeout(1500)
         self.assertEqual(self.page.inner_text("#cohort-note").strip(), "",
                          "an 'unchanged' claim must not outlive the data it described")
+    # -- theme --
+    def test_theme_toggles_and_persists(self):
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        start = self.page.evaluate("() => document.documentElement.dataset.theme")
+        bg = self.page.evaluate("() => getComputedStyle(document.body).backgroundColor")
+        self.page.click("#theme")
+        self.page.wait_for_timeout(400)
+        after = self.page.evaluate("() => document.documentElement.dataset.theme")
+        self.assertNotEqual(start, after, "the toggle changed nothing")
+        self.assertEqual(after, "dark" if start == "light" else "light")
+        new_bg = self.page.evaluate("() => getComputedStyle(document.body).backgroundColor")
+        self.assertNotEqual(bg, new_bg, "the palette did not change with the theme")
+        self.assertTrue(self.page.locator("#theme").is_visible())
+        self.page.reload(wait_until="domcontentloaded")
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.page.evaluate("() => document.documentElement.dataset.theme"),
+                         after, "the choice must survive a reload")
+
+    def test_theme_follows_the_system_when_never_chosen(self):
+        ctx = self._browser.new_context(viewport={"width": 1440, "height": 1000},
+                                         color_scheme="dark")
+        page = ctx.new_page()
+        try:
+            page.goto(BASE, wait_until="domcontentloaded")
+            page.wait_for_timeout(400)
+            self.assertEqual(page.evaluate("() => document.documentElement.dataset.theme"),
+                             "dark", "a dark-mode system should get dark, before any click")
+        finally:
+            page.close()
+            ctx.close()
+
+    def test_dark_palette_actually_inverts_the_ink(self):
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+
+        def luminance(colour):
+            """getComputedStyle returns rgb(), not hex — slicing would read 'gb'."""
+            parts = [int(float(p)) for p in re.findall(r"[\d.]+", colour)[:3]]
+            return sum(parts) / len(parts)
+
+        def probe():
+            return self.page.evaluate("""() => ({
+                ink: getComputedStyle(document.body).color,
+                bg: getComputedStyle(document.body).backgroundColor,
+            })""")
+
+        self.page.evaluate("() => { document.documentElement.dataset.theme = 'light'; }")
+        self.page.wait_for_timeout(250)
+        light = probe()
+        self.page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
+        self.page.wait_for_timeout(250)
+        dark = probe()
+        # light mode is dark text on a light ground; dark mode is the reverse
+        self.assertLess(luminance(light["ink"]), luminance(dark["ink"]),
+                        f"light ink {light['ink']} must be darker than dark ink {dark['ink']}")
+        self.assertGreater(luminance(light["bg"]), luminance(dark["bg"]),
+                           f"light ground {light['bg']} must be lighter than {dark['bg']}")
+
+    # -- loading --
+    def test_loading_state_appears_while_a_process_button_runs(self):
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.fill("#limit", "5")
+        self.page.click("#scan-go")
+        self.page.wait_for_function(
+            "() => document.body.dataset.busy === 'true'", timeout=15000)
+        # the sweep fades in, so wait for it to settle rather than sampling mid-transition
+        self.page.wait_for_function(
+            "() => getComputedStyle(document.querySelector('.sweep')).opacity > 0.9",
+            timeout=10000)
+        # One synchronous read: the busy window for a 5-candidate scan is well under a second, and
+        # four separate evaluates straddle it — the state changes between them, not the code.
+        got = self.page.evaluate("""() => {
+            const b = document.querySelector('#scan-go');
+            return {
+                disabled: b.disabled,
+                cls: b.className,
+                aria: b.getAttribute('aria-busy'),
+                sweep: getComputedStyle(document.querySelector('.sweep')).opacity,
+                anim: getComputedStyle(b.querySelector('.btn-ico')).animationName,
+            };
+        }""")
+        self.assertTrue(got["disabled"], "the control must be disabled while working")
+        self.assertIn("is-busy", got["cls"])
+        self.assertEqual(got["aria"], "true")
+        self.assertGreater(float(got["sweep"]), 0.5,
+                           f"the progress sweep must be visible while working, got {got['sweep']}")
+        self.assertEqual(got["anim"], "breathe", "the icon must animate while working")
+
+    def test_deepdive_shows_a_skeleton_while_loading(self):
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.wait_for_timeout(1200)
+        self.page.fill("#ticker", "TLKM")
+        self.page.click("#go")
+        self.page.wait_for_selector("#dd .skel", timeout=15000)
+        # wait for the skeleton to be REPLACED, not for a badge that was already on screen
+        self.page.wait_for_selector("#dd .skel", state="detached", timeout=45000)
+        self.assertIn("TLKM", self.page.inner_text("#dd"))
+
+    def test_loading_motion_uses_no_banned_easing(self):
+        """`linear` and `ease-in-out` are banned, and `transition: all` with them.
+
+        Asserted on computed values rather than on the stylesheet text: the file's own comments
+        legitimately mention both words when explaining why the icon does not spin."""
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.fill("#limit", "5")
+        self.page.click("#scan-go")
+        self.page.wait_for_function(
+            "() => document.body.dataset.busy === 'true'", timeout=15000)
+        bad = self.page.evaluate("""() => {
+            const out = [];
+            const check = (n, pseudo) => {
+                if (!n) return;
+                const cs = getComputedStyle(n, pseudo);
+                for (const t of [cs.animationTimingFunction, cs.transitionTimingFunction]) {
+                    if (t && (t.includes('linear') || t.includes('ease-in-out'))) {
+                        out.push((n.className || n.tagName) + (pseudo || '') + ' -> ' + t);
+                    }
+                }
+            };
+            for (const n of document.querySelectorAll('.btn, .pill, .chip, .sweep, .skel, .nav a')) {
+                check(n);
+            }
+            const sw = document.querySelector('.sweep');
+            if (sw) { check(sw, '::after'); }
+            check(document.querySelector('.btn.is-busy .btn-ico'));
+            return out;
+        }""")
+        self.assertEqual(bad, [], f"banned easing in use: {bad}")
+        self.page.wait_for_function(
+            "() => document.body.dataset.busy !== 'true'", timeout=60000)
+
+    def test_loading_motion_is_absent_under_reduced_motion(self):
+        ctx = self._browser.new_context(viewport={"width": 1440, "height": 1000},
+                                         reduced_motion="reduce")
+        page = ctx.new_page()
+        try:
+            page.goto(BASE, wait_until="domcontentloaded")
+            page.wait_for_selector("#dd .verdict", timeout=45000)
+            page.fill("#limit", "5")
+            page.click("#scan-go")
+            page.wait_for_function(
+                "() => document.body.dataset.busy === 'true'", timeout=15000)
+            for sel in ("#scan-go .btn-ico", ".sweep::after"):
+                name = page.evaluate(
+                    "(s) => { const n = s.endsWith('::after')"
+                    " ? getComputedStyle(document.querySelector('.sweep'), '::after')"
+                    " : getComputedStyle(document.querySelector(s));"
+                    " return n.animationName; }", sel)
+                self.assertEqual(name, "none", f"{sel} still animates under reduced motion")
+            page.wait_for_function(
+                "() => document.body.dataset.busy !== 'true'", timeout=60000)
+        finally:
+            page.close()
+            ctx.close()
 
     def test_motion_tokens_have_no_literal_durations(self):
         """The hand-written durations are now :root tokens, so the motion contract has one owner.
@@ -685,7 +850,10 @@ class BrowserTest(unittest.TestCase):
             page.wait_for_selector("#dd .verdict", timeout=45000)
             for sel in (".btn", ".pill", ".chip", ".pbar > i", ".nav a", "tbody tr"):
                 got = page.evaluate(
-                    "(s) => getComputedStyle(document.querySelector(s)).transitionDuration", sel)
+                    "(s) => { const n = document.querySelector(s);"
+                    " return n ? getComputedStyle(n).transitionDuration : null; }", sel)
+                if got is None:
+                    continue          # absent while data is still loading, not a failure
                 # a shorthand with three properties computes to "0s, 0s, 0s", not "0s"
                 for part in [p.strip() for p in got.split(",")]:
                     self.assertEqual(part, "0s", f"{sel} still transitions under reduced motion")

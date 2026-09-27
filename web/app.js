@@ -11,6 +11,9 @@
   const pct = (v, d = 1) => (v === null || v === undefined) ? "n/a" : `${v > 0 ? "+" : ""}${v.toFixed(d)}%`;
   const sign = (v) => (v === null || v === undefined) ? "muted" : (v > 0 ? "pos" : v < 0 ? "neg" : "muted");
   const num = (v, d = 2) => (v === null || v === undefined) ? "n/a" : v.toFixed(d);
+  /* Charts read the theme tokens rather than hardcoding hex, or they stay light-mode in dark. */
+  const token = (name) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   async function api(path, opts) {
     const r = await fetch(path, opts);
@@ -24,6 +27,8 @@
      One owner for "working". It used to have two shapes: #scan-go toggled disabled by hand and
      #go did not, so a second click on Deepdive fired a second Jev call and wiped the result.
      Every data-bearing control goes through here. */
+  let busyCount = 0;
+
   function setBusy(control, busy, busyLabel) {
     const label = control && control.firstChild;
     const hasLabel = label && label.nodeType === 3;
@@ -34,14 +39,26 @@
         }
         if (busyLabel) label.textContent = busyLabel;
       }
-      if (control) control.disabled = true;
+      if (control) {
+        control.disabled = true;
+        control.classList.add("is-busy");
+        control.setAttribute("aria-busy", "true");
+      }
+      busyCount += 1;
+      document.body.dataset.busy = "true";     // drives every .sweep in one place
       return;
     }
     if (hasLabel && control && control.dataset.idleLabel !== undefined) {
       label.textContent = control.dataset.idleLabel;
       delete control.dataset.idleLabel;
     }
-    if (control) control.disabled = false;
+    if (control) {
+      control.disabled = false;
+      control.classList.remove("is-busy");
+      control.removeAttribute("aria-busy");
+    }
+    busyCount = Math.max(0, busyCount - 1);
+    if (!busyCount) delete document.body.dataset.busy;
   }
 
   // Mirrors serve.py _clamp. Kept here so a bad value is refused in the browser rather than
@@ -113,12 +130,12 @@
       const ln = document.createElementNS(ns, "line");
       ln.setAttribute("x1", 0); ln.setAttribute("x2", W);
       ln.setAttribute("y1", y(level)); ln.setAttribute("y2", y(level));
-      ln.setAttribute("stroke", "#8d8d96"); ln.setAttribute("stroke-width", "1");
+      ln.setAttribute("stroke", token("--ink-3")); ln.setAttribute("stroke-width", "1");
       ln.setAttribute("stroke-dasharray", "3 4");
       svg.appendChild(ln);
       const t = document.createElementNS(ns, "text");
       t.setAttribute("x", 4); t.setAttribute("y", y(level) - 6);
-      t.setAttribute("fill", "#8d8d96");
+      t.setAttribute("fill", token("--ink-3"));
       t.setAttribute("font-size", "10");
       t.setAttribute("font-family", "ui-monospace, monospace");
       t.textContent = `significant high ${Math.round(level).toLocaleString()}`;
@@ -127,12 +144,12 @@
     const d = closes.map((c, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(c).toFixed(1)}`).join(" ");
     const area = document.createElementNS(ns, "path");
     area.setAttribute("d", `${d} L${x(closes.length - 1).toFixed(1)},${H - pad} L${pad},${H - pad} Z`);
-    area.setAttribute("fill", "rgba(10,10,11,.045)");
+    area.setAttribute("fill", token("--hair"));
     svg.appendChild(area);
     const line = document.createElementNS(ns, "path");
     line.setAttribute("d", d);
     line.setAttribute("fill", "none");
-    line.setAttribute("stroke", "#0a0a0b");
+    line.setAttribute("stroke", token("--ink"));
     line.setAttribute("stroke-width", "1.4");
     line.setAttribute("stroke-linejoin", "round");
     line.setAttribute("stroke-linecap", "round");
@@ -208,7 +225,11 @@
     $("#ticker").value = raw;
     const box = $("#dd");
     setBusy(go, true, "Reading…");
-    const pending = el("p", "empty", "Evaluating…");
+    const pending = el("div");
+    const bars = el("div");
+    [80, 60, 40].forEach((w) => bars.appendChild(el("div", `skel w-${w}`)));
+    pending.appendChild(bars);
+    pending.appendChild(el("p", "empty", "Evaluating…"));
     box.appendChild(pending);
     try {
       const d = await api(`/api/deepdive?ticker=${encodeURIComponent(raw)}`);
@@ -335,6 +356,9 @@
   let polling = null;
 
   function log(lines) {
+    // Never blank the panel. watch() polls on an interval, and a job that has not printed yet
+    // would otherwise wipe the command line the moment it started.
+    if (!lines || !lines.length) return;
     const box = $("#log");
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
     box.textContent = lines.join("\n");
@@ -381,11 +405,12 @@
     log([`$ run.py run --limit ${limit}`]);
     try {
       const r = await api(`/api/scan?limit=${limit}`, { method: "POST" });
+      // watch() starts a poll loop and RETURNS. The completion path inside it owns clearing the
+      // busy state — a finally here fired immediately and made the whole indicator a lie.
       await watch(r.job, go);
     } catch (e) {
-      log([`error: ${e.message}`]);
-    } finally {
       setBusy(go, false);
+      log([`error: ${e.message}`]);
     }
   }
 
@@ -447,19 +472,20 @@
     const zero = document.createElementNS(ns, "line");
     zero.setAttribute("x1", 0); zero.setAttribute("x2", W);
     zero.setAttribute("y1", y(0)); zero.setAttribute("y2", y(0));
-    zero.setAttribute("stroke", "#8d8d96"); zero.setAttribute("stroke-width", "1");
+    zero.setAttribute("stroke", token("--ink-3")); zero.setAttribute("stroke-width", "1");
     zero.setAttribute("stroke-dasharray", "3 4");
     svg.appendChild(zero);
     const d = pts.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.cumulative_r).toFixed(1)}`).join(" ");
     const path = document.createElementNS(ns, "path");
+    const tint = ys[ys.length - 1] >= 0 ? token("--enter") : token("--skip");
     path.setAttribute("d", d); path.setAttribute("fill", "none");
-    path.setAttribute("stroke", ys[ys.length - 1] >= 0 ? "#0f6e52" : "#9a3b2f");
+    path.setAttribute("stroke", tint);
     path.setAttribute("stroke-width", "1.6"); path.setAttribute("stroke-linejoin", "round");
     svg.appendChild(path);
     const end = document.createElementNS(ns, "circle");
     end.setAttribute("cx", x(pts.length - 1)); end.setAttribute("cy", y(ys[ys.length - 1]));
     end.setAttribute("r", "3.5");
-    end.setAttribute("fill", ys[ys.length - 1] >= 0 ? "#0f6e52" : "#9a3b2f");
+    end.setAttribute("fill", tint);
     svg.appendChild(end);
     box.appendChild(svg);
   }
@@ -579,8 +605,7 @@
     setBusy(btn, true, "Resolving…");
     log(["$ run.py resolve"]);
     try { const r = await api("/api/resolve", { method: "POST" }); await watch(r.job, btn); }
-    catch (err) { log([`error: ${err.message}`]); }
-    finally { setBusy(btn, false); }
+    catch (err) { setBusy(btn, false); log([`error: ${err.message}`]); }
   });
   document.querySelectorAll("#windows .pill").forEach((p) => {
     p.addEventListener("click", () => {
@@ -593,6 +618,34 @@
       loadReport();
     });
   });
+
+  /* ── theme ───────────────────────────────────────────────────────────────
+     The whole palette is tokenised, so switching is one attribute. The pre-paint script in
+     <head> already picked the initial value; this only wires the control and keeps the
+     system preference as the default when the user has never chosen. */
+  const themeBtn = $("#theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+  function paintTheme() {
+    const dark = document.documentElement.dataset.theme === "dark";
+    themeBtn.textContent = dark ? "☀" : "◐";
+    themeBtn.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+  }
+
+  themeBtn.addEventListener("click", () => {
+    const dark = document.documentElement.dataset.theme !== "dark";
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    try { localStorage.setItem("jev-theme", dark ? "dark" : "light"); } catch { /* private mode */ }
+    paintTheme();
+  });
+  prefersDark.addEventListener("change", (e) => {
+    let saved = null;
+    try { saved = localStorage.getItem("jev-theme"); } catch { /* storage unavailable */ }
+    if (saved) return;                    // an explicit choice wins over the system
+    document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+    paintTheme();
+  });
+  paintTheme();
 
   loadReport();
   loadShortlist();
