@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS idx_daily (
   PRIMARY KEY (day, code)
 );
 
+CREATE TABLE IF NOT EXISTS scan (
+  session TEXT PRIMARY KEY,
+  run_ts TEXT NOT NULL,
+  eligible INTEGER NOT NULL,
+  examined INTEGER NOT NULL,
+  complete INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS decision (
   id INTEGER PRIMARY KEY,
   run_ts TEXT NOT NULL,
@@ -118,6 +126,54 @@ def flow_history(code, since):
         out.append({"day": r["day"], "net": net,
                     "pct_float": net / shares * 100 if shares else None})
     return out
+
+
+# ---------- scan coverage ----------
+def record_scan(session, eligible, examined):
+    """What a run looked at. `complete` marks a scan that examined every eligible candidate.
+
+    This is what makes 'excluded from the watchlist' a sound claim. Without it, a ticker missing
+    from a later run is ambiguous: it may have been dropped on merit, or it may simply have sat
+    outside a --limit sample. Only a complete scan can tell those apart."""
+    conn().execute(
+        "INSERT OR REPLACE INTO scan (session, run_ts, eligible, examined, complete)"
+        " VALUES (?, datetime('now'), ?, ?, ?)",
+        (session, eligible, examined, 1 if examined >= eligible else 0))
+    conn().commit()
+
+
+def complete_sessions():
+    return [r[0] for r in conn().execute(
+        "SELECT session FROM scan WHERE complete=1 ORDER BY session")]
+
+
+# ---------- watchlist lifecycle ----------
+def watchlist():
+    """Every candidate the gate has ever surfaced, with the span it was on the list.
+
+    The decision table IS the watchlist: only gate-passed candidates are ever journalled, so this
+    is a grouping, not a second source of truth that could drift from it."""
+    rows = [dict(r) for r in conn().execute(
+        "SELECT ticker, MIN(session) first_seen, MAX(session) last_seen, COUNT(*) seen,"
+        " AVG(p_enter) avg_p, SUM(action='ENTER') entered FROM decision"
+        " GROUP BY ticker ORDER BY first_seen, ticker")]
+    done = complete_sessions()
+    latest = done[-1] if done else None
+    for r in rows:
+        r["avg_p"] = round(r["avg_p"] or 0, 3)
+        if latest is None:
+            # No complete scan has ever been recorded, so absence proves nothing. Saying
+            # EXCLUDED here would be a guess dressed as a fact.
+            r["status"] = "UNKNOWN"
+            r["exit_session"] = None
+        elif r["last_seen"] == latest:
+            r["status"] = "IN"
+            r["exit_session"] = None
+        else:
+            r["status"] = "EXCLUDED"
+            nxt = [s for s in done if s > r["last_seen"]]
+            r["exit_session"] = nxt[0] if nxt else None
+    return rows
 
 
 # ---------- journal ----------

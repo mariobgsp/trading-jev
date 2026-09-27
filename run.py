@@ -11,6 +11,7 @@ what keeps the polite fetch count sane.
 Usage:
   python3 run.py screen --limit 200        # universe -> shortlist, no API calls
   python3 run.py run --limit 200 --top 15  # ...then ask Jev and journal every answer
+  python3 run.py watchlist                 # every name ever surfaced, and what it did after
   python3 run.py resolve                   # fill outcomes for ENTER decisions
   python3 run.py analyze --since 7d        # this week's performance; 30d, 90d, all
 """
@@ -79,6 +80,7 @@ def screen_universe(limit, with_news, workers=MAX_WORKERS):
     kept, funnel = pre_gates(rows, store.idx_sessions(20))
     print("  ".join(f"{k}={v}" for k, v in funnel.items()))
     pool = kept if limit is None else kept[:limit]
+    store.record_scan(session, len(kept), len(pool))
     print(f"fetching bars for {len(pool)} candidates ({workers} workers)...")
     try:
         index_bars = bars_for("^JKSE")
@@ -148,6 +150,69 @@ def screener_plan(code):
     return screener.plan(bars_for(code))
 
 
+def forward_perf(bars, session, horizons=(5, 10, 20)):
+    """What a candidate did after it was surfaced. Forward from the signal bar only — the same
+    no-lookahead rule resolve() uses, so a watchlisted name is never scored on bars that existed
+    before the watchlist decision.
+
+    Reports the return at each horizon plus the best and worst excursion. MFE/MAE matter because
+    a veto can be wrong in two different ways: the name went up and Jev missed it (bad), or it
+    dipped before running (not bad, just early). Return alone cannot tell those apart.
+    """
+    start = None
+    for i, b in enumerate(bars):
+        if b["t"] >= store.session_ts(session):
+            start = i + 1
+            break
+    if start is None or start >= len(bars):
+        return None
+    base = bars[start - 1]["c"]
+    out = {"base": base, "bars_ahead": len(bars) - start, "last": None}
+    for h in horizons:
+        if start + h - 1 >= len(bars):
+            out[f"r{h}"] = out[f"mfe{h}"] = out[f"mae{h}"] = None
+            continue
+        window = bars[start:start + h]
+        out[f"r{h}"] = (window[-1]["c"] / base - 1) * 100
+        out[f"mfe{h}"] = (max(w["h"] for w in window) / base - 1) * 100
+        out[f"mae{h}"] = (min(w["l"] for w in window) / base - 1) * 100
+    out["last"] = (bars[-1]["c"] / base - 1) * 100
+    return out
+
+
+def _cell(perf, key, width=7):
+    """One fixed-width performance cell. A helper rather than a closure over the loop variable:
+    a nested def would bind it late, and this is a report that must not shift under us."""
+    if perf is None or perf.get(key) is None:
+        return f"{'n/a':>{width}}"
+    return f"{perf[key]:+{width}.2f}"
+
+
+def print_watchlist(rows, perf=True, horizons=(5, 10, 20)):
+    """rows: [(lifecycle, forward_perf_or_None)]. Prints the cohort and, with perf, what each
+    name did after it was put on the list."""
+    if not rows:
+        return print("watchlist is empty — run `run.py run` first")
+    inlist = [r for r, _ in rows if r["status"] == "IN"]
+    gone = [r for r, _ in rows if r["status"] == "EXCLUDED"]
+    print(f"watchlist: {len(rows)} names ever surfaced — {len(inlist)} still on it, "
+          f"{len(gone)} excluded")
+    head = (f"  {'ticker':8} {'first':9} {'last':9} {'seen':>4} {'avgP':>5} {'ent':>3} status")
+    if perf:
+        head += f" {'r5':>7} {'r10':>7} {'r20':>7} {'MFE20':>7} {'MAE20':>7}"
+    print(head)
+    for r, p in rows:
+        line = (f"  {r['ticker']:8} {r['first_seen']:9} {r['last_seen']:9} {r['seen']:4d} "
+                f"{r['avg_p']:5.2f} {r['entered']:3d} {r['status']:8}")
+        if perf:
+            line += "".join(f" {_cell(p, k)}"
+                            for k in ("r5", "r10", "r20", "mfe20", "mae20"))
+        print(line)
+    exits = [f"{r['ticker']}@{r['exit_session']}" for r in gone if r["exit_session"]]
+    if exits:
+        print("\nexcluded after being surfaced: " + ", ".join(exits))
+
+
 def resolve():
     """Score every ENTER that has no outcome yet. Returns a count so the caller can report
     unresolvable ones instead of dropping them silently."""
@@ -179,6 +244,22 @@ def resolve():
     return done, stuck
 
 
+def _watchlist_rows(honours, horizons=(5, 10, 20)):
+    """Join the lifecycle to forward performance. A ticker whose bars cannot be fetched is
+    reported as such rather than quietly dropped."""
+    out = []
+    for r in store.watchlist():
+        perf = None
+        if honours:
+            try:
+                perf = forward_perf(bars_for(r["ticker"].replace(".JK", ""), "6mo"),
+                                    r["first_seen"], horizons)
+            except Exception:  # noqa: BLE001 - one bad ticker must not blank the watchlist
+                perf = None
+        out.append((r, perf))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd")
@@ -188,6 +269,8 @@ def main():
         p.add_argument("--top", type=int, default=15, help="max to send to Jev")
         p.add_argument("--news", action="store_true", help="also score news (1 request per ticker)")
     sub.add_parser("resolve")
+    wl = sub.add_parser("watchlist")
+    wl.add_argument("--no-perf", action="store_true", help="lifecycle only, no bar fetching")
     an = sub.add_parser("analyze")
     an.add_argument("--since", default="all", help="all | 7d | 30d | 90d | YYYY-MM-DD")
     an.add_argument("--no-resolve", action="store_true", help="skip resolving pending outcomes")
@@ -196,6 +279,9 @@ def main():
 
     if a.cmd == "resolve":
         resolve()          # prints its own counts; its tuple is data, not an exit code
+        return 0
+    if a.cmd == "watchlist":
+        print_watchlist(_watchlist_rows(not a.no_perf))
         return 0
     if a.cmd == "analyze":
         try:
@@ -206,7 +292,11 @@ def main():
         if not a.no_resolve:
             resolve()
             print()
-        return store.print_report(store.report(since), per_decision=not a.short)
+        store.print_report(store.report(since), per_decision=not a.short)
+        if not a.short:
+            print("\ncohort — what every surfaced name did, including the ones Jev vetoed:")
+            print_watchlist(_watchlist_rows(not a.no_perf))
+        return 0
     if a.cmd not in ("screen", "run"):
         return ap.print_help()
 

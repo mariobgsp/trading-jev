@@ -119,7 +119,7 @@ Questions to ask per candidate:
 **No-trade rule:** `verdict.probabilities.enter < THRESHOLD` → flat. The threshold is a number, not
 the model's mood. Calibrate it from the journal, not by intuition.
 
-## Categories — 1 required gate, 4 rank signals, 16 descriptors
+## Categories — 2 required gates, 4 rank signals, 17 descriptors
 
 **Pre-gate 1 — price.** Only stocks priced under IDR 1,000. This is the goreng band, and it is the
 band `momentum_ignition.py` was already written for. Price comes from the same `GetStockSummary`
@@ -132,9 +132,12 @@ figure costs 20 calls, so the day's rows are stored instead and the window grows
 
 A stock that fails either pre-gate never reaches Jev and never costs a Jev call.
 
-**Required gate** — must pass to reach Jev:
+**Required gates** — must both pass to reach Jev:
 7. Breakout above the last confirmed significant high. This is the setup; the pivot rule is what
 makes the level mean something.
+22. **Liquid.** Average daily turnover ≥ IDR 1bn over 20 bars. A tradability constraint, not a
+signal: an illiquid momentum entry is one you cannot exit. Nine gorengan names trade literally
+nothing, and they would otherwise sail through a price-and-flow screen untouched.
 
 **Rank signals** — confirm and order the shortlist, never block:
 9. MACD crossing (bull) · 12. RSI bull divergence · 16. OBV raising · 1. HH from last H
@@ -145,7 +148,7 @@ makes the level mean something.
 crossing (bear) · 11. Stochastic crossing (bull) · 13. RSI bearish divergence · 14. Institution
 accumulation · 15. Institution distribution · 17. OBV downside · 18. sideways for N month ·
 19. good news a few days/month ago · 20. conviction breakout (7 plus range and volume expansion) ·
-21. breakdown (close below the last confirmed significant low)
+21. breakdown (close below the last confirmed significant low) · 23. illiquid
 
 ### Why one gate and not five — measured, not assumed
 
@@ -171,12 +174,32 @@ Two structural reasons, not bad luck:
 Adding 16 to 7 only moves 4.8% → 3.9%, so 16 is not a gate either — it is context. Hence one
 required structural gate, with the other four as rank.
 
+### Liquidity — measured, not assumed
+
+ADV20 is average daily turnover in IDR over 20 bars, approximated as volume × typical price
+because the bars carry no value field. Across 592 gorengan names:
+
+| percentile | ADV20 (IDR bn/day) |
+|---|---|
+| p05 | 0.021 |
+| p25 | 0.238 |
+| **p50** | **1.120** |
+| p75 | 5.285 |
+| p90 | 16.4 |
+
+**IDR 1bn is the median**, and it has a second reading: a IDR 100m position would be at most ~10%
+of a day's turnover. It is nearly free — of the 11 names that cleared the gate on 20260925, 10
+were above it, and the survivors run 3–10bn against a 1.12bn median. Momentum breakouts
+concentrate in liquid names, so the gate removes the trap without shrinking the funnel much.
+The one name it removed was HYGN at 0.80bn.
+
+Note it needs bars, so unlike the price and flow pre-gates it cannot run before the Yahoo fetch.
+
 **Descriptors** — context Jev reads, never block:
 2. not following the main index · 3. following the main index · 4. currently bearish ·
 5. currently uptrend · 6. creating LH from last L · 8. MACD crossing (bear) · 10. Stochastic
 crossing (bear) · 11. Stochastic crossing (bull) · 13. RSI bearish divergence · 14. Institution
 accumulation · 15. Institution distribution · 17. OBV downside · 18. sideways for N month ·
-19. good news a few days/month ago
 
 ## Entry plan and the no-case
 
@@ -185,9 +208,9 @@ Layer 3 approves, layer 4 records. Both branches write a row.
 - **YES** → one plan per candidate: entry, `stop = entry − 1.5·ATR`, TP1 1R, TP2 2R (already
   implemented in `ihsg_screener.py`). One plan, not three — add a second only if the journal shows
   entry timing is where trades die.
-- **NO** → the evidence row: Jev's per-question probabilities **and** which of the 19 categories
+- **NO** → the evidence row: Jev's per-question probabilities **and** which of the 23 categories
   fired or failed, with numbers. A probability of 0.31 is unreadable without the category table.
-  This row is also what later answers "was the no right?".
+  This row is also what later answers "was the no right?" — see `run.py watchlist`.
 
 ## Validation
 
@@ -208,7 +231,7 @@ Not a broker. No orders are placed. Every run writes decisions; a human presses 
 | `tools.py` | the single owner of the trading-tools dependency (loaded by path) |
 | `pivots.py` | significant highs and lows, `breakout`, `hh_breakout`, `lower_low`; self-check proves no repainting |
 | `idx.py` | `GetStockSummary` over stdlib http.client — universe, suspended filter, float, foreign flow |
-| `store.py` | SQLite: `idx_daily` (also the 24h cache) and `decision` (the journal), plus `report()` |
+| `store.py` | SQLite: `idx_daily` (also the 24h cache), `scan` (coverage), `decision` (the journal), plus `report()` and `watchlist()` |
 | `screen.py` | the 21 categories, the required gate, the rank score |
 | `jev.py` | the the structured endpoint client and the 5 typed questions |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `analyze` |
@@ -216,6 +239,7 @@ Not a broker. No orders are placed. Every run writes decisions; a human presses 
 ```bash
 python3 run.py screen --limit 200        # universe -> shortlist, no API calls
 python3 run.py run --limit 200 --top 15  # ...then ask Jev and journal every answer
+python3 run.py watchlist                 # every name ever surfaced, and what it did after
 python3 run.py analyze --since 7d        # this week; 30d, 90d, all, or YYYY-MM-DD
 python3 run.py resolve                   # just refill outcomes
 python3 pivots.py demo                   # no network
@@ -227,9 +251,29 @@ hit rate, cumulative R and an equity curve, Jev's calibration by `p_enter` bucke
 per-decision list. **R, not percent**, because a 3% stop and a 9% stop make a +4% move different
 trades; R divides by the risk that was actually planned.
 
+## The watchlist, and why it is not a second table
+
+`decision` **is** the watchlist: only gate-passed candidates are ever journalled, so the list is
+a grouping of the journal, not separate state that could drift from it. `store.watchlist()`
+gives each ticker `first_seen`, `last_seen`, `times_seen`, and `IN` or `EXCLUDED`.
+
+Two things make that claim sound:
+
+- **A `scan` table records coverage.** Every run writes how many candidates were eligible and how
+  many it actually examined. Without it, a ticker missing from a later run is ambiguous — dropped
+  on merit, or simply outside a `--limit` sample. Only a **complete** scan can tell those apart,
+  so exclusion is only ever judged against one. With no complete scan recorded at all the status
+  is `UNKNOWN`, never a guess.
+- **Performance is forward from the signal bar only**, the same no-lookahead rule `resolve()` uses,
+  at +5/+10/+20 bars plus MFE and MAE. MFE/MAE matter because a veto fails in two different ways:
+  the name ran and Jev missed it (bad), or it dipped first (not bad, just early).
+
+This is the missing half of the journal. Scoring only ENTER decisions means never learning
+whether a **veto** was right, which is the more common outcome: day one vetoed 11 of 11.
+
 **Measured funnel, session 20260925:** 963 listed → 804 tradable (159 suspended) → 611 under
-IDR 1,000 → 233 with foreign buying → 231 scored → **11 cleared the required gate** → 11 asked,
-**11 vetoed**. `curl_cffi` is not needed anywhere: IDX answers a bare stdlib request.
+IDR 1,000 → 233 with foreign buying → 231 scored → **10 cleared both gates** → all vetoed.
+`curl_cffi` is not needed anywhere: IDX answers a bare stdlib request.
 
 ⚠️ `idx_daily` stores `Remarks`, but only the trailing `X` is trusted as suspended. A leading
 `--U` is **not** a UMA marker — 611 of 963 rows carry it, including ordinary large caps like
@@ -246,7 +290,7 @@ ABBA and ABDA. Filtering on it deletes two thirds of the market.
 - The actor filter is currently a **single session** of foreign flow — the weakest input in the
   system, and the one `trading-cli` says matters most. The window grows automatically as
   `idx_daily` accumulates, so re-check the gate once ~20 sessions exist.
-- Whether one required gate is too loose or too tight. The shortlist was 11 names on day one.
+- Whether two required gates are too loose or too tight. The shortlist was 10 names on day one.
 - The entry plan uses the **decision bar's close** as the entry, not the next open. Realistic
   enough for a swing system, but it flatters results slightly, because in practice you cannot
   fill at a close you only saw at 16:00. Revisit when there is enough resolved history to see

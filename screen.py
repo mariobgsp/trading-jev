@@ -1,5 +1,5 @@
 # pyright: reportMissingImports=false
-"""The 21 categories: 1 required gate, 4 rank signals, 16 descriptors.
+"""The 23 categories: 2 required gates, 4 rank signals, 17 descriptors.
 
 Everything numeric comes from ihsg_screener's verified Wilder primitives and from pivots.py, so
 there is one definition per idea. Per candidate this needs: daily bars, the ^JKSE series, the IDX
@@ -27,6 +27,9 @@ Two additions worth calling out:
   21 breakdown  is the mirror of `breakout` — a close below the last confirmed significant low. A
                 descriptor, never a gate: this is a long-only system, so a breakdown says where
                 price is, not that the stock is tradeable.
+  22 / 23 liquid / illiquid  see LIQUID_MIN_ADV below. `liquid` is a required gate because
+                it is a tradability constraint, not a signal: an illiquid momentum entry is one
+                you cannot exit.
 """
 import importlib.util
 import os
@@ -36,7 +39,17 @@ from tools import screener
 
 # The setup. One structural event off a significant high; the pivot rule is what makes it mean
 # something. Measured: 4.8% of the flow-qualified pool, and requiring more than this returns ~0.
-REQUIRED = ("breakout",)
+REQUIRED = ("breakout", "liquid")
+# Confirmation and context. Ranked, not required — see the module docstring for the measurement.
+RANKED = ("obv_rising", "macd_cross_bull", "hh_from_last_h", "rsi_bull_divergence")
+
+# Minimum average daily turnover, IDR, over the last 20 bars. Measured, not assumed: across 592
+# gorengan names the ADV20 median is IDR 1.12bn (p25 0.24bn, p75 5.29bn, p90 16.4bn) and nine
+# names trade literally nothing. IDR 1bn is the median and also means a IDR 100m position is at
+# most ~10% of a day's turnover. It is close to free: of the 11 names that cleared the gate on
+# 20260925, 10 were above it, and the gate-clearing names run 3-10bn — momentum breakouts
+# concentrate in liquid names, so this barely cuts the shortlist while removing the trap.
+LIQUID_MIN_ADV = 1.0e9
 # Confirmation and context. Ranked, not required — see the module docstring for the measurement.
 RANKED = ("obv_rising", "macd_cross_bull", "hh_from_last_h", "rsi_bull_divergence")
 
@@ -45,6 +58,16 @@ EXPAND_RANGE = 1.5
 EXPAND_VOLUME = 1.5
 CROSS_UP = "golden"
 CROSS_DOWN = "death"
+
+
+def liquidity(bars, n=20):
+    """Average daily turnover in IDR. Bars carry volume but not value, so value is approximated
+    as volume x typical price — the usual OHLCV convention, and the only figure available
+    without a second data source."""
+    if not bars or len(bars) < n:
+        return None
+    window = bars[-n:]
+    return sum(((b["h"] + b["l"] + b["c"]) / 3) * (b["v"] or 0) for b in window) / n
 
 
 def _mean(xs):
@@ -118,6 +141,7 @@ def evaluate(code, bars, index_bars=None, flow=None, news=None):
     exp = expansion(bars)
     rs = rel_strength(bars, index_bars) if index_bars else None
     oslope = obv_slope(bars)
+    adv = liquidity(bars)
     net = (flow or {}).get("net")
     close = closes[-1]
 
@@ -161,6 +185,9 @@ def evaluate(code, bars, index_bars=None, flow=None, news=None):
             and (exp["volume_ratio"] or 0) >= EXPAND_VOLUME),
         # 21 — the mirror of 7
         "breakdown": ll is not None,
+        # 22 / 23 — tradability, not a signal
+        "liquid": None if adv is None else adv >= LIQUID_MIN_ADV,
+        "illiquid": None if adv is None else adv < LIQUID_MIN_ADV,
     }
 
     missing = sorted(k for k, v in cat.items() if v is None)
@@ -176,7 +203,7 @@ def evaluate(code, bars, index_bars=None, flow=None, news=None):
         "context": {
             "close": close, "rsi": x["rsi"]["rsi"], "adx": screener.adx(bars)[-1],
             "obv_slope": oslope, "relative_strength": rs, "expansion": exp,
-            "foreign_net": net, "base": base_ev, "crosses": x,
+            "foreign_net": net, "base": base_ev, "crosses": x, "adv20": adv,
             "breakout": bo, "lower_low": ll, "pivot_high": (bo or {}).get("level"),
         },
     }
@@ -198,6 +225,7 @@ def candidate_state(code, verdict):
                                 / 100_000_000) if c["foreign_net"] is not None else None,
         "rank_score": verdict["rank_score"],
         "rank_signals": verdict["rank_signals"],
+        "adv20_bn": (c["adv20"] or 0) / 1e9,
     }
 
 
@@ -207,7 +235,7 @@ def selfcheck(code="BBRI"):
     bars = bars_for(code)
     v = evaluate(code, bars, index_bars=None, flow=None)
     assert v is not None, f"{code} produced no verdict"
-    assert len(v["categories"]) == 21, f"expected 21 category keys, got {len(v['categories'])}"
+    assert len(v["categories"]) == 23, f"expected 23 category keys, got {len(v['categories'])}"
     assert set(REQUIRED) | set(RANKED) <= set(v["categories"]), "a gate or rank signal is not a category"
     assert v["rank_score"] == sum(1 for g in RANKED if v["categories"][g])
     assert v["rank_score"] == len(v["rank_signals"])
