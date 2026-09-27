@@ -1,0 +1,13 @@
+# secrets — never commit
+.env
+
+# run artifacts
+.result/
+*.log
+
+# python
+__pycache__/
+*.pyc
+
+.pi
+.ruff_cache
