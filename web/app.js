@@ -216,8 +216,12 @@
 
       const head = el("div");
       head.style.cssText = "display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin:1.1rem 0 .2rem";
-      const v = d.jev && d.jev.action ? d.jev.action : "NONE";
-      const badge = el("span", `verdict ${v.toLowerCase()}`);
+      // "NONE" is a verdict; "NO ANSWER" is Jev having not answered. The free tier rate limits,
+      // and the two must not look the same.
+      const failed = Boolean(d.jev && d.jev.error);
+      const action = d.jev && d.jev.action ? d.jev.action : "NONE";
+      const v = failed ? "NO ANSWER" : action;
+      const badge = el("span", `verdict ${failed ? "none" : v.toLowerCase()}`);
       badge.appendChild(el("span", "dot"));
       badge.appendChild(document.createTextNode(v));
       head.appendChild(badge);
@@ -385,6 +389,38 @@
     }
   }
 
+  function cohortSignature() {
+    return Array.from(document.querySelectorAll("#cohort tbody tr"))
+      .map((tr) => tr.textContent.replace(/\s+/g, " ").trim()).join("|");
+  }
+
+  /* Refresh, not Update. The watchlist is a GROUP BY over `decision`, so this can only show what
+     has already been journalled - it cannot surface a new candidate and it spends no Jev calls.
+     Labelling it 'Update' would promise analysis the code does not perform. */
+  async function refreshCohort() {
+    const btn = $("#cohort-refresh");
+    if (btn.disabled) return;
+    const note = $("#cohort-note");
+    const before = cohortSignature();
+    setBusy(btn, true, "Refreshing…");
+    btn.classList.add("is-busy");
+    try {
+      await loadCohort();
+      const rows = document.querySelectorAll("#cohort tbody tr").length;
+      const plural = rows === 1 ? "name" : "names";
+      note.classList.remove("err");
+      note.textContent = before === cohortSignature()
+        ? `up to date — ${rows} ${plural}, unchanged`
+        : `refreshed — ${rows} ${plural}, changed`;
+    } catch (e) {
+      note.classList.add("err");
+      note.textContent = e.message;
+    } finally {
+      btn.classList.remove("is-busy");
+      setBusy(btn, false);
+    }
+  }
+
   /* ── journal ────────────────────────────────────────────────────────── */
   function tile(k, v, n, cls) {
     const t = el("div", "tile");
@@ -537,6 +573,7 @@
   $("#go").addEventListener("click", () => deepdive());
   $("#ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") deepdive(); });
   $("#scan-go").addEventListener("click", startScan);
+  $("#cohort-refresh").addEventListener("click", refreshCohort);
   document.querySelector("[data-resolve]").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     setBusy(btn, true, "Resolving…");
@@ -549,6 +586,10 @@
     p.addEventListener("click", () => {
       document.querySelectorAll("#windows .pill").forEach((x) => x.classList.remove("on"));
       p.classList.add("on");
+      // a window change replaces the cohort, so an "unchanged" claim from before it is now stale
+      const note = $("#cohort-note");
+      note.textContent = "";
+      note.classList.remove("err");
       loadReport();
     });
   });

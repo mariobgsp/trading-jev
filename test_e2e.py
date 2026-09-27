@@ -127,6 +127,35 @@ def requires_journal(fn):
     return wrapper
 
 
+_jev = {}
+
+
+def jev_blocked():
+    """Why Jev is unusable right now, or None.
+
+    jev-1.13-free is rate limited, and every page load asks it one question — so a suite run, or
+    a user reloading, can throttle it. Probe once and cache, so a throttled run skips the
+    Jev-dependent tests coherently instead of reporting a KeyError on a missing 'answers' key.
+    """
+    if "err" not in _jev:
+        try:
+            _, d = _json(f"/api/deepdive?ticker={TICKER}")
+            _jev["err"] = (d.get("jev") or {}).get("error")
+        except Exception as e:  # noqa: BLE001 - a failed probe is itself a block
+            _jev["err"] = f"probe failed: {e}"
+    return _jev["err"]
+
+
+def requires_jev(fn):
+    def wrapper(self):
+        why = jev_blocked()
+        if why and not EMPTY:
+            self.skipTest(f"Jev unavailable: {why}")
+        return fn(self)
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
 # ---------- the API surface ----------
 class ApiTest(unittest.TestCase):
     def test_health_reports_a_ready_state(self):
@@ -156,6 +185,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertIn("error", json.loads(body))
 
+    @requires_jev
     def test_deepdive_returns_the_full_shape(self):
         status, d = _json(f"/api/deepdive?ticker={TICKER}")
         self.assertEqual(status, 200)
@@ -165,6 +195,8 @@ class ApiTest(unittest.TestCase):
         self.assertIn("rank_score", d)
         self.assertTrue(d["closes"], "a sparkline needs closes")
         self.assertTrue(d["prose"], "the state shown to Jev must be returned for audit")
+        # everything above is screen data and holds whether or not Jev answered; only the
+        # verdict is conditional, and requires_jev has already established it is available
         self.assertEqual(set(d["jev"]["answers"]),
                          {"verdict", "p_enter", "momentum_confirmed", "conviction", "risk"})
         a = d["jev"]["answers"]
@@ -370,6 +402,7 @@ class BrowserTest(unittest.TestCase):
         self.assertGreaterEqual(self.page.locator("#spark svg path").count(), 2,
                                 "an area and a line")
 
+    @requires_jev
     def test_jev_answers_render_as_probability_bars(self):
         self.page.wait_for_selector("#dd .verdict", timeout=45000)
         self.page.wait_for_selector("#jev .pbar", timeout=20000)
@@ -449,6 +482,89 @@ class BrowserTest(unittest.TestCase):
         self.page.wait_for_timeout(1500)
         self.assertGreater(self.page.locator("section#journal .reveal.in").count(), 0,
                            "a section scrolled into view never revealed")
+
+    @requires_journal
+    def test_watchlist_refresh_reloads_without_analysing(self):
+        """The button is 'Refresh', not 'Update': the watchlist is a GROUP BY over the journal, so
+        it can only re-read what was recorded. It must never spend a Jev call or start a scan."""
+        self.page.wait_for_selector("#cohort tbody tr", timeout=45000)
+        self.page.wait_for_timeout(1500)
+        reads, analyses = [], []
+        self.page.on("request", lambda r: (
+            reads.append(r.url) if "/api/watchlist" in r.url else
+            analyses.append(r.url) if ("/api/deepdive" in r.url or "/api/scan" in r.url) else None))
+        self.page.click("#cohort-refresh")
+        self.page.wait_for_function(
+            "() => !document.querySelector('#cohort-refresh').disabled", timeout=30000)
+        self.page.wait_for_timeout(600)
+        self.assertEqual(len(reads), 1, f"refresh should re-read once, made {len(reads)}")
+        self.assertEqual(analyses, [], "refresh must not analyse — that is the Scan button's job")
+
+    @requires_journal
+    def test_watchlist_refresh_reports_unchanged_honestly(self):
+        self.page.wait_for_selector("#cohort tbody tr", timeout=45000)
+        self.page.wait_for_timeout(1500)
+        before = self.page.locator("#cohort tbody tr").count()
+        self.page.click("#cohort-refresh")
+        self.page.wait_for_function(
+            "() => document.querySelector('#cohort-note').textContent.trim().length > 0",
+            timeout=30000)
+        note = self.page.inner_text("#cohort-note")
+        self.assertIn("unchanged", note, f"nothing was journalled, so it must say so: {note!r}")
+        self.assertEqual(self.page.locator("#cohort tbody tr").count(), before)
+
+    def test_watchlist_refresh_animates_only_while_in_flight(self):
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        idle = self.page.evaluate(
+            "() => getComputedStyle(document.querySelector('#cohort-refresh .btn-ico')).animationName")
+        self.assertEqual(idle, "none", "the disc must not spin at rest")
+        self.page.click("#cohort-refresh")
+        self.page.wait_for_function(
+            "() => document.querySelector('#cohort-refresh').classList.contains('is-busy')",
+            timeout=15000)
+        busy = self.page.evaluate(
+            "() => getComputedStyle(document.querySelector('#cohort-refresh .btn-ico')).animationName")
+        self.assertNotEqual(busy, "none", "the disc must spin while the request is in flight")
+        self.assertTrue(self.page.locator("#cohort-refresh").is_disabled())
+        self.page.wait_for_function(
+            "() => !document.querySelector('#cohort-refresh').disabled", timeout=30000)
+        settled = self.page.evaluate(
+            "() => getComputedStyle(document.querySelector('#cohort-refresh .btn-ico')).animationName")
+        self.assertEqual(settled, "none", "the spin must stop when the request lands")
+
+    def test_watchlist_refresh_respects_reduced_motion(self):
+        ctx = self._browser.new_context(viewport={"width": 1440, "height": 1000},
+                                         reduced_motion="reduce")
+        page = ctx.new_page()
+        try:
+            page.goto(BASE, wait_until="domcontentloaded")
+            page.wait_for_selector("#cohort-refresh", timeout=45000)
+            page.click("#cohort-refresh")
+            page.wait_for_function(
+                "() => document.querySelector('#cohort-refresh').classList.contains('is-busy')",
+                timeout=15000)
+            self.assertEqual(
+                page.evaluate("() => getComputedStyle("
+                              "document.querySelector('#cohort-refresh .btn-ico')).animationName"),
+                "none", "the spin must be off under reduced motion; the disabled state still reads")
+            page.wait_for_function(
+                "() => !document.querySelector('#cohort-refresh').disabled", timeout=30000)
+        finally:
+            page.close()
+            ctx.close()
+
+    @requires_journal
+    def test_window_change_clears_a_stale_refresh_claim(self):
+        self.page.wait_for_selector("#cohort tbody tr", timeout=45000)
+        self.page.wait_for_timeout(1500)
+        self.page.click("#cohort-refresh")
+        self.page.wait_for_function(
+            "() => document.querySelector('#cohort-note').textContent.trim().length > 0",
+            timeout=30000)
+        self.page.click("#windows .pill[data-since='30d']")
+        self.page.wait_for_timeout(1500)
+        self.assertEqual(self.page.inner_text("#cohort-note").strip(), "",
+                         "an 'unchanged' claim must not outlive the data it described")
 
     def test_motion_tokens_have_no_literal_durations(self):
         """The hand-written durations are now :root tokens, so the motion contract has one owner.
@@ -557,6 +673,7 @@ class BrowserTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#go").inner_text().strip()[:1], "D",
                          "the idle label must be restored exactly")
 
+    @requires_jev
     def test_reduced_motion_zeroes_every_transition(self):
         """A user who asked for no motion was still getting every transition animated: the block
         covered only .reveal. Every transition must now be inert."""

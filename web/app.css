@@ -204,6 +204,17 @@ tbody tr:hover { background: rgba(10,10,11,.022); }
 .pos { color: var(--enter); } .neg { color: var(--skip); }
 .scroll { overflow-x: auto; }
 
+/* ── watchlist refresh ─────────────────────────────────────────────────────
+   A rotation of the existing icon disc, in flight only. The table is usually already
+   populated, so a skeleton would imply data is arriving when nothing is being computed. */
+@keyframes disc-spin { to { transform: rotate(360deg); } }
+.btn.is-busy .btn-ico { animation: disc-spin var(--dur-bar) linear infinite; }
+.btn.is-busy { cursor: progress; }
+/* prefers-reduced-motion already sets `animation: none` globally, so the spin is covered. */
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.card-head h3 { margin-bottom: .2rem; }
+#cohort-note { margin: 0 0 .9rem; min-height: 1.1em; }
+
 pre.log {
   font-family: var(--mono); font-size: .74rem; line-height: 1.7; color: var(--ink-2);
   background: rgba(10,10,11,.035); border-radius: 1.15rem; padding: 1.1rem 1.2rem;

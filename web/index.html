@@ -170,9 +170,15 @@
 
       <div class="shell s12 reveal">
         <div class="core">
-          <h3>The watchlist cohort</h3>
-          <p class="sub">Every name ever surfaced, and what it did afterwards — including the ones
-            Jev vetoed. That is how you find out whether a veto was right.</p>
+          <div class="card-head">
+            <div>
+              <h3>The watchlist cohort</h3>
+              <p class="sub">Every name ever surfaced, and what it did afterwards — including the ones
+                Jev vetoed. That is how you find out whether a veto was right.</p>
+            </div>
+            <button class="btn" id="cohort-refresh">Refresh<span class="btn-ico">↻</span></button>
+          </div>
+          <p class="small muted" id="cohort-note"></p>
           <div class="scroll"><table id="cohort">
             <thead><tr><th>Ticker</th><th>First seen</th><th>Last seen</th><th class="n">Seen</th>
               <th class="n">Avg p</th><th>Status</th><th class="n">+5</th><th class="n">+10</th>
