@@ -18,6 +18,7 @@ say so, instead of pretending an empty database is a broken one.
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -441,6 +442,18 @@ class BrowserTest(unittest.TestCase):
         self.assertGreater(self.page.locator("section#journal .reveal.in").count(), 0,
                            "a section scrolled into view never revealed")
 
+    def test_motion_tokens_have_no_literal_durations(self):
+        """The hand-written durations are now :root tokens, so the motion contract has one owner.
+        Guard it against someone reintroducing a literal."""
+        with open(os.path.join(HERE, "web", "app.css")) as fh:
+            css = fh.read()
+        offenders = [ln.strip() for ln in css.splitlines()
+                     if "transition:" in ln and re.search(r"\d+m?s\b", ln)]
+        self.assertEqual(offenders, [], f"literal duration back in a transition: {offenders}")
+        for token in ("--ease", "--dur-quick", "--dur-move", "--dur-reveal", "--dur-bar",
+                      "--dur-row", "--reveal-y", "--reveal-blur"):
+            self.assertIn(token, css, f"{token} is missing from the motion contract")
+
     def test_reduced_motion_is_respected(self):
         """With motion reduced the content must be legible immediately, with no transition
         waiting on an IntersectionObserver that may never fire."""
@@ -458,6 +471,28 @@ class BrowserTest(unittest.TestCase):
             self.assertEqual(style["opacity"], "1", "a reduced-motion reveal must be visible")
             self.assertIn("0s", style["duration"], "a reduced-motion reveal must not animate")
             self.assertTrue(page.locator("#dd .verdict").is_visible())
+        finally:
+            page.close()
+            ctx.close()
+
+    def test_reduced_motion_zeroes_every_transition(self):
+        """A user who asked for no motion was still getting every transition animated: the block
+        covered only .reveal. Every transition must now be inert."""
+        ctx = self._browser.new_context(viewport={"width": 1440, "height": 1000},
+                                         reduced_motion="reduce")
+        page = ctx.new_page()
+        try:
+            page.goto(BASE, wait_until="domcontentloaded")
+            page.wait_for_selector("#dd .verdict", timeout=45000)
+            for sel in (".btn", ".pill", ".chip", ".pbar > i", ".nav a", "tbody tr"):
+                got = page.evaluate(
+                    "(s) => getComputedStyle(document.querySelector(s)).transitionDuration", sel)
+                # a shorthand with three properties computes to "0s, 0s, 0s", not "0s"
+                for part in [p.strip() for p in got.split(",")]:
+                    self.assertEqual(part, "0s", f"{sel} still transitions under reduced motion")
+            self.assertEqual(
+                page.evaluate("() => getComputedStyle(document.querySelector('.btn')).animationName"),
+                "none", "an animation survived reduced motion")
         finally:
             page.close()
             ctx.close()

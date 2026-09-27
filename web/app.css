@@ -16,6 +16,18 @@
   --shadow:    0 1px 2px rgba(10,10,11,.035), 0 10px 30px -12px rgba(10,10,11,.13);
   --shadow-lg: 0 2px 4px rgba(10,10,11,.04), 0 24px 60px -20px rgba(10,10,11,.20);
   --ease:      cubic-bezier(.32, .72, 0, 1);
+  /* Motion contract. Every duration here was already written as a literal in this file; these
+     tokens take those exact values, so introducing them changed no computed transition. Role
+     names, not numbers, are the vocabulary: quick for a state or colour change, move for a
+     control responding, reveal for entry choreography, bar for a value being reported, row for
+     a table row hover. */
+  --dur-quick:  .55s;
+  --dur-move:   .6s;
+  --dur-reveal: .95s;
+  --dur-bar:    1s;
+  --dur-row:    .5s;
+  --reveal-y:   2.4rem;
+  --reveal-blur: 9px;
   --r-shell:   2rem;
   --r-core:    calc(2rem - 7px);
   --sans: ui-sans-serif, system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
@@ -63,7 +75,7 @@ body::before {
 .nav a {
   color: var(--ink-2); text-decoration: none; font-size: .78rem; font-weight: 520;
   padding: .5rem .95rem; border-radius: 999px;
-  transition: color .6s var(--ease), background-color .6s var(--ease);
+  transition: color var(--dur-move) var(--ease), background-color var(--dur-move) var(--ease);
 }
 .nav a:hover { color: var(--ink); background: rgba(10,10,11,.045); }
 .nav a.on { color: var(--ink); background: rgba(10,10,11,.075); }
@@ -109,14 +121,14 @@ h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); font-weight: 640; letter-spacing: -.
   padding: .78rem .8rem .78rem 1.4rem; border: 0; cursor: pointer;
   border-radius: 999px; background: var(--ink); color: #fff;
   font: inherit; font-size: .84rem; font-weight: 540; letter-spacing: -.01em;
-  transition: transform .6s var(--ease), opacity .6s var(--ease), box-shadow .6s var(--ease);
+  transition: transform var(--dur-move) var(--ease), opacity var(--dur-move) var(--ease), box-shadow var(--dur-move) var(--ease);
 }
 .btn:disabled { opacity: .42; cursor: not-allowed; }
 .btn:not(:disabled):active { transform: scale(.985); }
 .btn-ico {
   width: 1.85rem; height: 1.85rem; border-radius: 999px; display: grid; place-items: center;
   background: rgba(255,255,255,.16); font-size: .8rem; line-height: 1;
-  transition: transform .6s var(--ease), background-color .6s var(--ease);
+  transition: transform var(--dur-move) var(--ease), background-color var(--dur-move) var(--ease);
 }
 .btn:not(:disabled):hover .btn-ico { transform: translate(4px,-2px) scale(1.06); background: rgba(255,255,255,.24); }
 .btn.ghost { background: rgba(10,10,11,.05); color: var(--ink); box-shadow: inset 0 0 0 1px var(--hair); }
@@ -129,7 +141,7 @@ input[type=text] {
   text-transform: uppercase; color: var(--ink);
   padding: .8rem 1.15rem; border: 0; border-radius: 999px;
   background: rgba(10,10,11,.045); box-shadow: inset 0 0 0 1px var(--hair);
-  transition: box-shadow .6s var(--ease), background-color .6s var(--ease);
+  transition: box-shadow var(--dur-move) var(--ease), background-color var(--dur-move) var(--ease);
 }
 input[type=text]:focus { outline: none; background: #fff; box-shadow: inset 0 0 0 1.5px var(--hair-2), var(--shadow); }
 input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--ink-3); font-weight: 450; }
@@ -139,7 +151,7 @@ input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--
   font: inherit; font-size: .76rem; font-weight: 520; color: var(--ink-2); cursor: pointer;
   padding: .45rem .9rem; border: 0; border-radius: 999px;
   background: rgba(10,10,11,.045); box-shadow: inset 0 0 0 1px transparent;
-  transition: color .55s var(--ease), background-color .55s var(--ease), box-shadow .55s var(--ease);
+  transition: color var(--dur-quick) var(--ease), background-color var(--dur-quick) var(--ease), box-shadow var(--dur-quick) var(--ease);
 }
 .pill:hover { color: var(--ink); }
 .pill.on { color: var(--ink); background: #fff; box-shadow: inset 0 0 0 1px var(--hair), var(--shadow); }
@@ -159,7 +171,7 @@ input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--
 
 /* a probability bar — the shape of Jev's confidence */
 .pbar { height: .3rem; border-radius: 999px; background: rgba(10,10,11,.07); overflow: hidden; }
-.pbar > i { display: block; height: 100%; border-radius: 999px; background: var(--ink); transform-origin: left; transform: scaleX(0); transition: transform 1s var(--ease); }
+.pbar > i { display: block; height: 100%; border-radius: 999px; background: var(--ink); transform-origin: left; transform: scaleX(0); transition: transform var(--dur-bar) var(--ease); }
 .in .pbar > i, .shown .pbar > i { transform: scaleX(var(--v, 0)); }
 
 .rows { display: flex; flex-direction: column; gap: .1rem; }
@@ -174,7 +186,7 @@ input::placeholder { text-transform: none; letter-spacing: -.01em; color: var(--
   font-size: .72rem; font-weight: 520; padding: .34rem .7rem; border-radius: 999px;
   background: rgba(10,10,11,.04); color: var(--ink-3);
   box-shadow: inset 0 0 0 1px transparent;
-  transition: transform .55s var(--ease), color .55s var(--ease), background-color .55s var(--ease);
+  transition: transform var(--dur-quick) var(--ease), color var(--dur-quick) var(--ease), background-color var(--dur-quick) var(--ease);
 }
 .chip.on { background: var(--enter-bg); color: var(--enter); box-shadow: inset 0 0 0 1px rgba(15,110,82,.16); }
 .chip.gate { box-shadow: inset 0 0 0 1px var(--hair-2); color: var(--ink); font-weight: 600; }
@@ -187,7 +199,7 @@ th {
 }
 td { padding: .62rem .8rem .62rem 0; border-top: 1px solid var(--hair); font-size: .85rem; }
 td.n, th.n { text-align: right; padding-right: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-tbody tr { transition: background-color .5s var(--ease); }
+tbody tr { transition: background-color var(--dur-row) var(--ease); }
 tbody tr:hover { background: rgba(10,10,11,.022); }
 .pos { color: var(--enter); } .neg { color: var(--skip); }
 .scroll { overflow-x: auto; }
@@ -214,15 +226,22 @@ pre.log:empty::after { content: "no output yet"; color: var(--ink-3); }
 
 /* ── entry choreography ──────────────────────────────────────────────────── */
 .reveal {
-  opacity: 0; transform: translateY(2.4rem); filter: blur(9px);
-  transition: opacity .95s var(--ease), transform .95s var(--ease), filter .95s var(--ease);
+  opacity: 0; transform: translateY(var(--reveal-y)); filter: blur(var(--reveal-blur));
+  transition: opacity var(--dur-reveal) var(--ease), transform var(--dur-reveal) var(--ease), filter var(--dur-reveal) var(--ease);
   will-change: transform, opacity, filter;
 }
 .reveal.in { opacity: 1; transform: none; filter: none; will-change: auto; }
 
+/* Reduced motion zeroes the tokens, so every transition that references one stops — not just
+   .reveal, which is all this query used to cover. A user who asked for no motion was still
+   getting eleven animated transitions. */
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-quick: 0s; --dur-move: 0s; --dur-reveal: 0s; --dur-bar: 0s; --dur-row: 0s;
+  }
   .reveal { opacity: 1; transform: none; filter: none; transition: none; }
   html { scroll-behavior: auto; }
+  *, *::before, *::after { transition-delay: 0s !important; animation: none !important; }
 }
 
 /* ── mobile: everything collapses to one column, rotations never used ─────── */
