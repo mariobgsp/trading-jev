@@ -1,0 +1,44 @@
+%% trading-jev — one candidate, end to end.
+%% Nothing here identifies the decision service; its URL and model id are configuration (.env).
+flowchart TD
+    OP(["operator"])
+
+    subgraph SRC["sources"]
+        IDX[("IDX GetStockSummary<br/>one call, ~963 rows")]
+        YF[("Yahoo OHLCV<br/>cached, polite")]
+    end
+
+    subgraph LAYER2["screen (layers 1 and 2)"]
+        SC["screen.py<br/>23 categories"]
+        GATES{"2 required gates<br/>breakout + liquid"}
+        RANK["4 rank signals<br/>obv, macd, hh, rsi div"]
+        TT["trading-tools<br/>indicators, ATR plan"]
+    end
+
+    subgraph DECIDE["decide (layer 3)"]
+        JV["jev.py<br/>5 typed questions"]
+    end
+
+    subgraph LAYER4["journal (layer 4)"]
+        DB[("trading-jev.db<br/>decision, idx_daily, scan")]
+        RP["reports<br/>analyze, watchlist, accuracy"]
+    end
+
+    OP -->|run| SC
+    SC -->|universe, suspended, foreign flow| IDX
+    SC -->|daily bars| YF
+    SC --> TT
+    TT --> SC
+    SC --> GATES
+    SC --> RANK
+
+    GATES -->|passes| JV
+    JV -->|typed value + probability each| DB
+    JV -.->|"no price: the plan is Python's arithmetic"| DB
+    GATES -->|fails| SKIP["never reaches Jev"]
+    SKIP --> DB
+
+    OP -->|analyze, watchlist| RP
+    RP -->|outcomes resolved from bars| DB
+    DB --> RP
+    RP -->|R, hit rate, calibration, cohort| OP

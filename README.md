@@ -36,16 +36,107 @@ $EDITOR .env              # JEV_API_KEY / JEV_API_URL / JEV_MODEL
 Or skip the file entirely if your shell already exports them: `export JEV_API_KEY=...`.
 `.env` is read only if the variable is not already set.
 
-Check the three moving parts before trusting a run:
+Check the moving parts before trusting a run:
 
 ```bash
 python3 pivots.py demo    # pivot rule, no network
+python3 store.py          # the journal invariant, on a temp database
 python3 jev.py demo       # one real Jev call, prints both state renderings
 python3 idx.py refresh    # the IDX snapshot, prints the filter funnel
 ```
 
 `python3 run.py --help` lists every command. The database (`trading-jev.db`) is created on first
 use; nothing else needs initialising.
+
+---
+
+## How it works
+
+The whole system is four layers, and only two of them are new code. Rendered copies live in
+[`docs/pipeline.svg`](docs/pipeline.svg) and [`docs/scan-run.svg`](docs/scan-run.svg) for offline
+reading; the `.mmd` sources beside them are the editable originals.
+
+```mermaid
+flowchart TD
+    OP(["operator"])
+    subgraph SRC["sources"]
+        IDX[("IDX GetStockSummary<br/>one call, ~963 rows")]
+        YF[("Yahoo OHLCV<br/>cached, polite")]
+    end
+    subgraph LAYER2["screen (layers 1 and 2)"]
+        SC["screen.py<br/>23 categories"]
+        GATES{"2 required gates<br/>breakout + liquid"}
+        RANK["4 rank signals<br/>obv, macd, hh, rsi div"]
+        TT["trading-tools<br/>indicators, ATR plan"]
+    end
+    subgraph DECIDE["decide (layer 3)"]
+        JV["jev.py<br/>5 typed questions"]
+    end
+    subgraph LAYER4["journal (layer 4)"]
+        DB[("trading-jev.db<br/>decision, idx_daily, scan")]
+        RP["reports<br/>analyze, watchlist, accuracy"]
+    end
+    OP -->|run| SC
+    SC -->|universe, suspended, foreign flow| IDX
+    SC -->|daily bars| YF
+    SC --> TT
+    TT --> SC
+    SC --> GATES
+    SC --> RANK
+    GATES -->|passes| JV
+    JV -->|typed value + probability each| DB
+    JV -.->|"no price: the plan is Python's arithmetic"| DB
+    GATES -->|fails| SKIP["never reaches Jev"]
+    SKIP --> DB
+    OP -->|analyze, watchlist| RP
+    RP -->|outcomes resolved from bars| DB
+    DB --> RP
+    RP -->|R, hit rate, calibration, cohort| OP
+```
+
+A scan never blocks the page. The browser starts a job, polls it, and the server runs `run.py` as
+a subprocess whose stdout becomes the live log:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor OP as operator
+    participant API as serve.py<br/>127.0.0.1
+    participant RUN as run.py
+    participant DB as trading-jev.db
+    participant JEV as Jev endpoint
+    OP->>API: POST /api/scan?limit=200
+    API->>API: setBusy() to button, sweep, body[data-busy]
+    API-->>OP: 202 with job id
+    loop every 900 ms until done
+        OP->>API: GET /api/job?id=...
+        API-->>OP: status + log lines
+    end
+    API->>RUN: spawn subprocess (cwd = repo)
+    RUN->>RUN: IDX call, pre-gates, bars, 23 categories, 2 gates
+    RUN->>JEV: shortlist, five questions each
+    JEV-->>RUN: value + probability per answer
+    RUN->>DB: upsert decision (session, ticker)
+    Note over RUN,DB: upsert, not insert - a re-scan replaces<br/>that ticker, and a resolved outcome survives
+    RUN->>DB: record scan(eligible, examined, complete)
+    RUN-->>API: stdout streams into job.log
+    API-->>OP: done
+    OP->>API: load shortlist + report
+    API->>DB: shortlist, report
+    DB-->>API: rows
+    API-->>OP: funnel, shortlist, journal
+```
+
+**The pivot rule is the part worth understanding.** "Last H" as a 20-bar high is useless on a
+ranging stock, so a high has to clear four tests: it dominated the prior 20 bars, it stood at
+least 2×ATR above the *mean* high of that window, nothing exceeded it for 3 bars, and it gave back
+at least 3.5×ATR afterwards. A ranging stock therefore has **no** significant high at all, which
+is the sideways filter — the absence *is* the signal, rather than a meaningless level to break.
+
+**Liquidity is a required gate, not a descriptor.** An illiquid momentum entry is one you cannot
+exit, and nine gorengan names trade literally nothing. The threshold is IDR 1bn of 20-day average
+turnover: the median of 592 names, and a reading where a IDR 100m position is at most ~10% of a
+day's volume.
 
 ---
 
@@ -170,8 +261,23 @@ Three views over the same data, no build step and no dependencies:
   entry plan, and the prose state Jev was actually shown. A preview: it does not journal.
 - **Scan** — runs a scan and streams the real CLI output live. The funnel and the shortlist are
   read from the same `evaluate()` path the CLI uses, not parsed out of stdout.
-- **Journal** — performance over a window, the equity curve in R, Jev's calibration by bucket, and
-  the watchlist cohort with what each name did after it was surfaced.
+- **Journal** — performance over a window, the equity curve in R, Jev's calibration by bucket, the
+  watchlist cohort with what each name did after it was surfaced, and a **Refresh** control that
+  re-reads the journal without re-analysing it. It is "Refresh" rather than "Update" on purpose:
+  the watchlist is a `GROUP BY` over the journal, so it can only show what was already recorded,
+  and a test asserts one `/api/watchlist` read and **zero** analysis calls.
+
+**Dark mode** is a token layer, not a second stylesheet: every tint in `app.css` is a
+`color-mix()` against `--ink`/`--paper`, so the whole palette inverts from one
+`[data-theme="dark"]` block. The toggle follows your OS preference until you choose otherwise, and
+a pre-paint script in `<head>` sets it before the stylesheet applies, so a dark-mode user gets no
+white flash.
+
+**Loading state** for every process button: the icon breathes on the project's own curve, a
+transform-only progress sweep runs above the log, and the deepdive card shows a skeleton. The
+looping indicator deliberately does not use `linear` — an infinite rotation needs constant
+velocity, but a linear spin is banned by the motion contract and `ease-in-out` pulses visibly.
+`prefers-reduced-motion` degrades all of it to the plain disabled state.
 
 Bound to `127.0.0.1` deliberately: this puts a trading decision surface and a key-spending client
 on your machine, and nothing needs it to be reachable from anywhere else. It falls forward to the
@@ -184,7 +290,7 @@ spinner.
 ## Tests
 
 ```bash
-python3 test_e2e.py            # the whole suite: 34 tests, ~32s
+python3 test_e2e.py            # the whole suite: 52 tests
 python3 test_e2e.py -v         # verbose
 python3 test_e2e.py ApiTest    # one suite
 E2E_EMPTY=1 python3 test_e2e.py   # simulate a fresh install: no journal at all
@@ -202,12 +308,15 @@ It covers two rings, and both matter:
   never rendered into the page, and the server is not reachable off loopback.
 - **The page, in Chromium** — no console errors and no failed requests on any test, all 23
   categories rendering, the sparkline, real rows in both tables, clicking Deepdive, a bad ticker
-  showing an error without breaking the page, the reveal animation firing, `prefers-reduced-motion`
-  being honoured, the 375px layout collapsing to one column with no sideways scroll, and every
-  control having an accessible name.
+  showing an error without breaking the page *or discarding the analysis already on screen*, the
+  reveal animation firing, dark mode inverting the palette and surviving a reload, the loading
+  state appearing on a real job, no banned easing anywhere, `prefers-reduced-motion` being
+  honoured, the 375px layout collapsing to one column with no sideways scroll, and every control
+  having an accessible name.
 
-Journal-dependent tests skip themselves on a fresh machine and say so, rather than failing and
-looking like a broken install.
+Tests that need the decision service skip themselves when it is unavailable, reporting the actual
+reason rather than failing on a missing key. Journal-dependent tests skip on a fresh machine, so
+a new laptop does not look like a broken install.
 
 ## Troubleshooting
 
@@ -240,6 +349,8 @@ looking like a broken install.
 | `serve.py` | the local web app: deepdive, scan, journal |
 | `test_e2e.py` | the end-to-end suite: API contract, security, and the page in a real browser |
 | `web/` | `index.html`, `app.css`, `app.js` — hand-written, no framework, no CDN |
+| `docs/` | diagram sources (`.mmd`) and their rendered `.svg` |
+| `design-plans/` | audits and plans kept beside the code, not inside the app |
 
 `.env` and `trading-jev.db` are gitignored. This app is local-only: no deploy target, no CI, no
 container. The git repo exists purely so you can `git diff` a strategy change.
@@ -255,6 +366,10 @@ only 10, and HYGN at 0.80bn ADV20 is the one it now drops.)
 
 What this means for reading it:
 
+- **The journal is keyed on (session, ticker).** Re-scanning a session replaces that ticker's
+  decision instead of adding a second row, and an already-resolved outcome survives the re-scan.
+  Before that constraint existed a re-scan double-counted every name, which is exactly what it did
+  to this journal once.
 - The foreign-flow gate is a **single session** of data. It is the weakest input in the system
   and the one the research says matters most. The window grows automatically as sessions
   accumulate.

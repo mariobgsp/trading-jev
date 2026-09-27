@@ -1,0 +1,33 @@
+%% One scan, as the browser experiences it. The job model is the part that is not obvious
+%% from the code: the page never waits on a long request, it starts one and polls.
+sequenceDiagram
+    autonumber
+    actor OP as operator
+    participant API as serve.py<br/>127.0.0.1
+    participant RUN as run.py
+    participant DB as trading-jev.db
+    participant JEV as Jev endpoint
+
+    OP->>API: POST /api/scan?limit=200
+    API->>API: setBusy() → button, sweep, body[data-busy]
+    API-->>OP: 202 { job: id }
+
+    loop every 900 ms until done
+        OP->>API: GET /api/job?id=…
+        API-->>OP: status + log lines
+    end
+
+    API->>RUN: spawn subprocess (cwd = repo)
+    RUN->>RUN: IDX call → pre-gates → bars → 23 categories → 2 gates
+    RUN->>JEV: shortlist, five questions each
+    JEV-->>RUN: value + probability per answer
+    RUN->>DB: upsert decision (session, ticker)
+    Note over RUN,DB: upsert, not insert — a re-scan replaces<br/>that ticker, and a resolved outcome survives
+    RUN->>DB: record scan(eligible, examined, complete)
+    RUN-->>API: stdout streams into job.log
+    API-->>OP: done
+
+    OP->>API: load shortlist + report
+    API->>DB: shortlist, report
+    DB-->>API: rows
+    API-->>OP: funnel, shortlist, journal
