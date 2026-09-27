@@ -182,6 +182,34 @@ spinner.
 
 ---
 
+## Tests
+
+```bash
+python3 test_e2e.py            # the whole suite: 34 tests, ~32s
+python3 test_e2e.py -v         # verbose
+python3 test_e2e.py ApiTest    # one suite
+E2E_EMPTY=1 python3 test_e2e.py   # simulate a fresh install: no journal at all
+```
+
+Stdlib `unittest` plus Playwright, both already installed. The suite starts its own server on a
+free port, runs against a **copy** of the journal, and shuts down — so it cannot mutate your
+data. That is not theoretical: an early version ran real scans, and a clamped `limit=99999`
+silently started a whole-universe scan that journalled ten decisions.
+
+It covers two rings, and both matter:
+
+- **The API** — every endpoint's shape, the error paths (a bad ticker is a 400, not a 500), the
+  job lifecycle, argument clamping, and three security properties: the key is never echoed, it is
+  never rendered into the page, and the server is not reachable off loopback.
+- **The page, in Chromium** — no console errors and no failed requests on any test, all 23
+  categories rendering, the sparkline, real rows in both tables, clicking Deepdive, a bad ticker
+  showing an error without breaking the page, the reveal animation firing, `prefers-reduced-motion`
+  being honoured, the 375px layout collapsing to one column with no sideways scroll, and every
+  control having an accessible name.
+
+Journal-dependent tests skip themselves on a fresh machine and say so, rather than failing and
+looking like a broken install.
+
 ## Troubleshooting
 
 | symptom | cause |
@@ -211,6 +239,7 @@ spinner.
 | `store.py` | SQLite: `idx_daily`, `scan`, `decision`; `report()` and `watchlist()` |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `watchlist` · `analyze` |
 | `serve.py` | the local web app: deepdive, scan, journal |
+| `test_e2e.py` | the end-to-end suite: API contract, security, and the page in a real browser |
 | `web/` | `index.html`, `app.css`, `app.js` — hand-written, no framework, no CDN |
 
 `.env` and `trading-jev.db` are gitignored. This app is local-only: no deploy target, no CI, no

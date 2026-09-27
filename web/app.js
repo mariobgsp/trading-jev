@@ -129,6 +129,7 @@
         td.colSpan = 7; tr.appendChild(td); tbody.appendChild(tr);
         return;
       }
+      let stale = 0;
       for (const r of d.rows) {
         const tr = el("tr");
         const cell = (txt, cls) => tr.appendChild(el("td", cls, txt));
@@ -138,8 +139,21 @@
         cell(num(r.rsi, 0), "n");
         cell(num((r.adv20 || 0) / 1e9, 2), "n");
         cell(String(r.rank_score), "n");
-        cell((r.rank_signals || []).join(", ") || "—");
+        if (r.passed) {
+          cell((r.rank_signals || []).join(", ") || "—");
+        } else {
+          // Journalled under older rules. The gate set changed after this session, so the name
+          // would not clear today's gate. Show that rather than quietly dropping it.
+          stale += 1;
+          cell("no longer clears the gate", "small neg");
+        }
         tbody.appendChild(tr);
+      }
+      if (stale) {
+        const tr = el("tr");
+        const td = el("td", "small muted",
+          `${stale} name(s) were journalled under an earlier gate set and would not qualify today`);
+        td.colSpan = 7; tr.appendChild(td); tbody.appendChild(tr);
       }
     } catch (e) {
       tbody.innerHTML = "";
@@ -462,7 +476,10 @@
   }
 
   /* ── wiring ─────────────────────────────────────────────────────────── */
-  $("#go").addEventListener("click", deepdive);
+  // Wrapped, not passed by reference: addEventListener would hand deepdive the MouseEvent as its
+  // `code` argument, and a MouseEvent has no .trim() — the handler threw and the button did
+  // nothing. Only an end-to-end click test could find that.
+  $("#go").addEventListener("click", () => deepdive());
   $("#ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") deepdive(); });
   $("#scan-go").addEventListener("click", startScan);
   document.querySelector("[data-resolve]").addEventListener("click", async (e) => {

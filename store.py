@@ -23,7 +23,9 @@ import os
 import sqlite3
 import threading
 
-DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trading-jev.db")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# Overridable so the E2E suite can run against a copy and never mutate the real journal.
+DB = os.environ.get("TRADING_JEV_DB") or os.path.join(_HERE, "trading-jev.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS idx_daily (

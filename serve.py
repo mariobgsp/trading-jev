@@ -317,8 +317,14 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/scan":
             limit = _clamp((query.get("limit") or ["200"])[0], 1, 1000, 200)
             top = _clamp((query.get("top") or ["15"])[0], 1, 100, 15)
-            return self._json(202, {"job": start_job(
-                [sys.executable, "run.py", "run", "--limit", str(limit), "--top", str(top)])})
+            cmd = [sys.executable, "run.py", "run", "--limit", str(limit), "--top", str(top)]
+            if (query.get("dry_run") or ["0"])[0] == "1":
+                # Validate and clamp without executing. This is the only way to observe the clamp
+                # itself, and it lets the test suite check the bounds without starting a real
+                # whole-universe scan that would mutate the journal.
+                return self._json(200, {"dry_run": True, "limit": limit, "top": top,
+                                        "cmd": " ".join(cmd[1:])})
+            return self._json(202, {"job": start_job(cmd)})
         if parsed.path == "/api/resolve":
             return self._json(202, {"job": start_job([sys.executable, "run.py", "resolve"])})
         self._json(404, {"error": "not found"})
