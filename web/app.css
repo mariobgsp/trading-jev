@@ -223,6 +223,8 @@ pre.log:empty::after { content: "no output yet"; color: var(--ink-3); }
 
 .empty { color: var(--ink-3); font-size: .85rem; padding: 1.5rem 0; }
 .err { color: var(--skip); font-size: .85rem; padding: 1rem 0; }
+/* an error line that is only there when it has something to say — no layout shift */
+#limit-err:empty { display: none; padding: 0; }
 
 /* ── entry choreography ──────────────────────────────────────────────────── */
 .reveal {

@@ -324,6 +324,10 @@ class BrowserTest(unittest.TestCase):
         self.page = self._browser.new_page(viewport={"width": 1440, "height": 1000})
         self.console = []
         self.failed = []
+        # The browser logs a console entry for every non-2xx response. A test that deliberately
+        # submits a bad ticker or a bad limit must set this, or assertClean() reports the refusal
+        # it asked for as a failure. Script errors and unexpected network failures still fail.
+        self.allow_http_errors = False
         self.page.on("console", lambda m: self.console.append(m.text) if m.type == "error" else None)
         self.page.on("pageerror", lambda e: self.console.append(f"pageerror: {e}"))
         self.page.on("requestfailed",
@@ -334,7 +338,9 @@ class BrowserTest(unittest.TestCase):
         self.page.close()
 
     def assertClean(self):
-        self.assertEqual(self.console, [], "console errors on the page")
+        noise = (lambda t: t.startswith("Failed to load resource")) if self.allow_http_errors \
+            else (lambda t: False)
+        self.assertEqual([t for t in self.console if not noise(t)], [], "console errors on the page")
         self.assertEqual(self.failed, [], "failed network requests")
 
     def settle(self, ms=400):
@@ -385,15 +391,17 @@ class BrowserTest(unittest.TestCase):
     # -- interaction --
     def test_deepdiving_another_ticker_updates_the_page(self):
         self.page.wait_for_selector("#dd .verdict", timeout=45000)
-        self.page.evaluate("() => { window.__before = document.querySelector('#dd').innerText; }")
+        self.page.wait_for_timeout(1200)
         self.page.fill("#ticker", "TLKM")
         self.page.click("#go")
-        # Wait for the result, not merely for a change: "Evaluating…" is itself a change, and
-        # waiting on that raced the fetch.
-        self.page.wait_for_selector("#dd .verdict, #dd .err", timeout=45000)
+        # Not `wait_for_selector('.verdict')`: the previous result is now kept on screen while the
+        # new one loads, so the badge is present before and after. Wait for the content itself.
+        self.page.wait_for_function(
+            "() => { const t = document.querySelector('#dd').innerText;"
+            " return !t.includes('Evaluating') && t.includes('TLKM'); }", timeout=45000)
         self.assertEqual(self.page.locator("#ticker").input_value(), "TLKM")
         self.assertIn("TLKM", self.page.inner_text("#dd"))
-        self.assertNotIn("Evaluating", self.page.inner_text("#dd"))
+        self.settle()
         self.assertClean()
 
     def test_a_bad_ticker_shows_an_error_rather_than_breaking_the_page(self):
@@ -474,6 +482,80 @@ class BrowserTest(unittest.TestCase):
         finally:
             page.close()
             ctx.close()
+
+    def test_deepdive_does_not_double_submit(self):
+        """The Deepdive button was never disabled, so a second click fired a second Jev call.
+
+        A second *user* click cannot be forced while the button is disabled — Playwright simply
+        waits for it to re-enable and then clicks. So the second attempt is dispatched in the
+        page, which is the case the guard actually has to survive: a click arriving mid-flight."""
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.wait_for_timeout(1200)
+        calls = []
+        self.page.on("request", lambda r: calls.append(r.url)
+                     if "/api/deepdive" in r.url else None)
+        self.page.fill("#ticker", "TLKM")
+        self.page.click("#go")
+        self.page.wait_for_function(
+            "() => document.querySelector('#go').disabled === true", timeout=10000)
+        for _ in range(3):
+            self.page.evaluate("() => document.querySelector('#go').click()")
+        self.page.wait_for_function(
+            "() => !document.querySelector('#dd').innerText.includes('Evaluating')", timeout=45000)
+        self.page.wait_for_timeout(500)
+        self.assertEqual(len(calls), 1, f"a disabled button must absorb the click, made {len(calls)}")
+
+    def test_failed_deepdive_preserves_the_previous_result(self):
+        """A typo must not cost the user the analysis already on screen."""
+        self.allow_http_errors = True       # the 400 is the point of this test
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.wait_for_timeout(1200)
+        good = self.page.inner_text("#dd")
+        self.page.fill("#ticker", "123")
+        self.page.click("#go")
+        self.page.wait_for_selector("#dd .err", timeout=20000)
+        self.assertTrue(self.page.inner_text("#dd .err").strip())
+        self.assertIn(good.split("\n")[0], self.page.inner_text("#dd"),
+                      "the previous result was discarded on a failed request")
+        self.assertClean()
+
+    def test_limit_input_is_validated(self):
+        """`abc` used to become 200 silently, because only the server clamped it."""
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        scans = []
+        self.page.on("request", lambda r: scans.append(r.url) if "/api/scan" in r.url else None)
+        for bad in ("abc", "12abc", "0", "5000"):
+            with self.subTest(limit=bad):
+                self.page.fill("#limit", bad)
+                self.page.click("#scan-go")
+                self.page.wait_for_timeout(250)
+                self.assertTrue(self.page.inner_text("#limit-err").strip(),
+                                f"{bad!r} was accepted without complaint")
+        self.assertEqual(scans, [], "an invalid limit must not reach the server")
+        # and a valid one still works
+        self.page.fill("#limit", "5")
+        self.page.click("#scan-go")
+        self.page.wait_for_function(
+            "() => document.querySelector('#scan-go').disabled === true", timeout=10000)
+        self.page.wait_for_function(
+            "() => document.querySelector('#scan-go').disabled === false", timeout=45000)
+        self.assertEqual(self.page.inner_text("#limit-err").strip(), "",
+                         "a valid limit must clear the message")
+        self.assertClean()
+
+    def test_in_flight_state_disables_the_control(self):
+        self.page.wait_for_selector("#dd .verdict", timeout=45000)
+        self.page.fill("#ticker", "GOTO")
+        self.page.click("#go")
+        self.page.wait_for_function(
+            "() => document.querySelector('#go').disabled === true", timeout=10000)
+        self.assertEqual(self.page.locator("#go .btn-ico").inner_text(), "↗",
+                         "the icon disc must survive the busy state")
+        self.page.wait_for_selector("#dd .verdict, #dd .err", timeout=45000)
+        self.page.wait_for_function(
+            "() => document.querySelector('#go').disabled === false", timeout=20000)
+        self.assertEqual(self.page.locator("#go").inner_text().strip()[:1], "D",
+                         "the idle label must be restored exactly")
 
     def test_reduced_motion_zeroes_every_transition(self):
         """A user who asked for no motion was still getting every transition animated: the block

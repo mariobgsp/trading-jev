@@ -20,6 +20,43 @@
     return data;
   }
 
+  /* ── in-flight state ────────────────────────────────────────────────────
+     One owner for "working". It used to have two shapes: #scan-go toggled disabled by hand and
+     #go did not, so a second click on Deepdive fired a second Jev call and wiped the result.
+     Every data-bearing control goes through here. */
+  function setBusy(control, busy, busyLabel) {
+    const label = control && control.firstChild;
+    const hasLabel = label && label.nodeType === 3;
+    if (busy) {
+      if (hasLabel) {
+        if (control.dataset.idleLabel === undefined) {
+          control.dataset.idleLabel = label.textContent;
+        }
+        if (busyLabel) label.textContent = busyLabel;
+      }
+      if (control) control.disabled = true;
+      return;
+    }
+    if (hasLabel && control && control.dataset.idleLabel !== undefined) {
+      label.textContent = control.dataset.idleLabel;
+      delete control.dataset.idleLabel;
+    }
+    if (control) control.disabled = false;
+  }
+
+  // Mirrors serve.py _clamp. Kept here so a bad value is refused in the browser rather than
+  // silently becoming the default with no indication that it did.
+  const LIMIT = { lo: 1, hi: 1000, def: 200 };
+
+  function readLimit() {
+    const raw = $("#limit").value.trim();
+    if (!raw) return LIMIT.def;                       // empty falls back, as the server does
+    if (!/^\d+$/.test(raw)) return null;              // parseInt would accept "12abc"; don't
+    const n = parseInt(raw, 10);
+    if (n < LIMIT.lo || n > LIMIT.hi) return null;
+    return n;
+  }
+
   /* ── entry choreography: reveal on intersect, once ───────────────────── */
   const seen = new WeakSet();
   const io = new IntersectionObserver((entries) => {
@@ -166,10 +203,13 @@
   async function deepdive(code) {
     const raw = (code || $("#ticker").value).trim().toUpperCase();
     if (!raw) return;
+    const go = $("#go");
+    if (go.disabled) return;                            // one request per click
     $("#ticker").value = raw;
     const box = $("#dd");
-    box.innerHTML = "";
-    box.appendChild(el("p", "empty", "Evaluating…"));
+    setBusy(go, true, "Reading…");
+    const pending = el("p", "empty", "Evaluating…");
+    box.appendChild(pending);
     try {
       const d = await api(`/api/deepdive?ticker=${encodeURIComponent(raw)}`);
       box.innerHTML = "";
@@ -278,8 +318,12 @@
       }
       $("#prose").textContent = d.prose;
     } catch (e) {
-      box.innerHTML = "";
+      // Whatever is already on screen stays. A typo must not cost the user the analysis they
+      // are reading.
+      pending.remove();
       box.appendChild(el("p", "err", e.message));
+    } finally {
+      setBusy(go, false);
     }
   }
 
@@ -293,12 +337,13 @@
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
 
-  async function watch(jobId) {
+  async function watch(jobId, control) {
     if (polling) clearInterval(polling);
     const done = async () => {
       clearInterval(polling);
       polling = null;
-      $("#scan-go").disabled = false;
+      // the control that started the job, not whichever one happens to be on screen
+      setBusy(control, false);
       await loadReport();
     };
     polling = setInterval(async () => {
@@ -312,22 +357,31 @@
         }
       } catch (e) {
         clearInterval(polling); polling = null;
-        $("#scan-go").disabled = false;
+        setBusy(control, false);
         log([`error: ${e.message}`]);
       }
     }, 900);
   }
 
   async function startScan() {
-    const limit = parseInt($("#limit").value, 10) || 200;
-    $("#scan-go").disabled = true;
+    const go = $("#scan-go");
+    if (go.disabled) return;
+    const err = $("#limit-err");
+    const limit = readLimit();
+    if (limit === null) {
+      err.textContent = `Limit must be a whole number from ${LIMIT.lo} to ${LIMIT.hi}.`;
+      return;
+    }
+    err.textContent = "";
+    setBusy(go, true, "Scanning…");
     log([`$ run.py run --limit ${limit}`]);
     try {
       const r = await api(`/api/scan?limit=${limit}`, { method: "POST" });
-      await watch(r.job);
+      await watch(r.job, go);
     } catch (e) {
-      $("#scan-go").disabled = false;
       log([`error: ${e.message}`]);
+    } finally {
+      setBusy(go, false);
     }
   }
 
@@ -470,6 +524,7 @@
       equity(rep);
       calibration(rep);
     } catch (e) {
+      $("#rep-sub").classList.add("err");
       $("#rep-sub").textContent = e.message;
     }
     await loadCohort();
@@ -483,11 +538,12 @@
   $("#ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") deepdive(); });
   $("#scan-go").addEventListener("click", startScan);
   document.querySelector("[data-resolve]").addEventListener("click", async (e) => {
-    e.target.disabled = true;
+    const btn = e.currentTarget;
+    setBusy(btn, true, "Resolving…");
     log(["$ run.py resolve"]);
-    try { const r = await api("/api/resolve", { method: "POST" }); await watch(r.job); }
+    try { const r = await api("/api/resolve", { method: "POST" }); await watch(r.job, btn); }
     catch (err) { log([`error: ${err.message}`]); }
-    finally { e.target.disabled = false; }
+    finally { setBusy(btn, false); }
   });
   document.querySelectorAll("#windows .pill").forEach((p) => {
     p.addEventListener("click", () => {

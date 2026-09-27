@@ -90,11 +90,12 @@
       <div class="shell s4 reveal">
         <div class="core">
           <h3>Run a scan</h3>
-          <p class="sub">Journals every decision, vetoes included.</p>
-          <div class="field" style="margin-bottom:.8rem">
-            <input type="text" id="limit" value="200" inputmode="numeric" title="max candidates to fetch bars for">
+          <p class="sub">Journals every decision, vetoes included. Limit 1–1000 candidates.</p>
+          <div class="field" style="margin-bottom:.4rem">
+            <input type="text" id="limit" value="200" inputmode="numeric" aria-label="max candidates to fetch bars for">
             <button class="btn" id="scan-go">Scan<span class="btn-ico">↗</span></button>
           </div>
+          <p class="small err" id="limit-err"></p>
           <div class="pills" style="margin-bottom:1rem">
             <button class="pill" data-resolve>Resolve open outcomes</button>
           </div>
