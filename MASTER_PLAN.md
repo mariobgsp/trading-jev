@@ -119,26 +119,57 @@ Questions to ask per candidate:
 **No-trade rule:** `verdict.probabilities.enter < THRESHOLD` → flat. The threshold is a number, not
 the model's mood. Calibrate it from the journal, not by intuition.
 
-## Categories — 5 gates, 14 descriptors
+## Categories — 1 required gate, 4 rank signals, 16 descriptors
 
 **Pre-gate 1 — price.** Only stocks priced under IDR 1,000. This is the goreng band, and it is the
 band `momentum_ignition.py` was already written for. Price comes from the same `GetStockSummary`
 call that builds the universe — no extra fetch.
 
-**Pre-gate 2 — actor filter.** Foreign net buy over 20d must be positive. This is a gate because
+**Pre-gate 2 — actor filter.** Foreign net buy must be positive. This is a gate because
 `trading-cli`'s own research concluded OHLCV momentum has no proven out-of-sample edge without an
-actor filter.
+actor filter. The window is however many sessions have accumulated, starting at 1 — a 20-day
+figure costs 20 calls, so the day's rows are stored instead and the window grows with use.
 
 A stock that fails either pre-gate never reaches Jev and never costs a Jev call.
 
-**Gates** — must pass to reach Jev:
-1. Stock creating a new significant high above the last confirmed significant high
-7. Stock breaking out above the last confirmed significant high
-9. MACD crossing (bull)
-12. RSI bull divergence
-16. OBV raising
+**Required gate** — must pass to reach Jev:
+7. Breakout above the last confirmed significant high. This is the setup; the pivot rule is what
+makes the level mean something.
 
-Categories 1 and 7 use the pivot rule above, not a bar count.
+**Rank signals** — confirm and order the shortlist, never block:
+9. MACD crossing (bull) · 12. RSI bull divergence · 16. OBV raising · 1. HH from last H
+
+**Descriptors** — context Jev reads, never block:
+2. not following the main index · 3. following the main index · 4. currently bearish ·
+5. currently uptrend · 6. creating LH from last L · 8. MACD crossing (bear) · 10. Stochastic
+crossing (bear) · 11. Stochastic crossing (bull) · 13. RSI bearish divergence · 14. Institution
+accumulation · 15. Institution distribution · 17. OBV downside · 18. sideways for N month ·
+19. good news a few days/month ago · 20. conviction breakout (7 plus range and volume expansion) ·
+21. breakdown (close below the last confirmed significant low)
+
+### Why one gate and not five — measured, not assumed
+
+The plan originally ANDed five gates. Over the **231** gorengan names that cleared the flow
+pre-gate, that produced **0.0%** — a system that can never fire. Per-gate pass rates:
+
+| category | pass rate |
+|---|---|
+| 16 OBV raising | 59.6% |
+| 9 MACD bull cross | 13.6% |
+| 7 breakout | 5.1% |
+| 12 RSI bull divergence | 1.5% |
+| 1 HH from last H | 0.5% |
+
+Two structural reasons, not bad luck:
+
+- **12 is temporally opposed to 7.** An RSI bull divergence fires *before* price rises; a
+  breakout confirms the move has begun. Requiring both on the same bar asks for a contradiction.
+  Confirmed: the 6 names that cleared the three core gates had **zero** bonus signals.
+- **1 is a subset of 7** (it also needs the prior pivot to be lower), so the two counted one idea
+  twice.
+
+Adding 16 to 7 only moves 4.8% → 3.9%, so 16 is not a gate either — it is context. Hence one
+required structural gate, with the other four as rank.
 
 **Descriptors** — context Jev reads, never block:
 2. not following the main index · 3. following the main index · 4. currently bearish ·
@@ -170,10 +201,44 @@ Layer 3 approves, layer 4 records. Both branches write a row.
 
 Not a broker. No orders are placed. Every run writes decisions; a human presses the buy.
 
+## What is built
+
+| file | does |
+|------|------|
+| `tools.py` | the single owner of the trading-tools dependency (loaded by path) |
+| `pivots.py` | significant highs and lows, `breakout`, `hh_breakout`, `lower_low`; self-check proves no repainting |
+| `idx.py` | `GetStockSummary` over stdlib http.client — universe, suspended filter, float, foreign flow |
+| `store.py` | SQLite: `idx_daily` (also the 24h cache) and `decision` (the journal), plus `accuracy()` |
+| `screen.py` | the 21 categories, the required gate, the rank score |
+| `jev.py` | the the structured endpoint client and the 5 typed questions |
+| `run.py` | the pipeline: `screen` · `run` · `resolve` · `accuracy` |
+
+```bash
+python3 run.py screen --limit 200        # universe -> shortlist, no API calls
+python3 run.py run --limit 200 --top 15  # ...then ask Jev and journal every answer
+python3 run.py resolve                   # fill outcomes for old ENTER decisions
+python3 run.py accuracy                  # hit rate per p_enter bucket
+python3 pivots.py demo                   # no network
+python3 jev.py demo                      # one real call
+```
+
+**Measured funnel, session 20260925:** 963 listed → 804 tradable (159 suspended) → 611 under
+IDR 1,000 → 233 with foreign buying → 231 scored → **11 cleared the required gate** → 11 asked,
+**11 vetoed**. `curl_cffi` is not needed anywhere: IDX answers a bare stdlib request.
+
+⚠️ `idx_daily` stores `Remarks`, but only the trailing `X` is trusted as suspended. A leading
+`--U` is **not** a UMA marker — 611 of 963 rows carry it, including ordinary large caps like
+ABBA and ABDA. Filtering on it deletes two thirds of the market.
+
 ## Still open — decisions, not blockers
 
-- `THRESHOLD` for `enter` — set from the journal after the first ~50 scored candidates.
-- Pivot parameters (1×ATR prominence, ±20 baseline, 3 confirm) — defensible defaults, not proven
-  best. Measure against the alternatives above on real trades; no independent evidence says any one
-  method is universally best.
-- the structured endpoint rate limits — untested. Measure on the first full run.
+- `THRESHOLD` for `enter`, set at 0.6 provisionally. Day one gave a **100% veto rate** (11
+  candidates, `p_enter` 0.00–0.16, conviction 0.8–1.6 of 3). That is a plausible read of a thin
+  session, but it is also what an over-confident no looks like. Judge it over ~50 scored
+  candidates, not one day.
+- Pivot parameters (1×ATR prominence, ±20 baseline, 3 confirm) are swept and defensible; tighten
+  or loosen from the journal, not from the sweep.
+- The actor filter is currently a **single session** of foreign flow — the weakest input in the
+  system, and the one `trading-cli` says matters most. The window grows automatically as
+  `idx_daily` accumulates, so re-check the gate once ~20 sessions exist.
+- Whether one required gate is too loose or too tight. The shortlist was 11 names on day one.

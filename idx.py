@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
+# The modules in this directory import each other (store.py, pivots.py, jev.py). Pyright in this
+# setup does not pick up pyrightconfig.json's extraPaths and reports every one as missing, while
+# `python3 idx.py` resolves them fine. Verified: the import works, the tables create, the tests run.
 """IDX end-of-day summary — universe, suspended filter, and the actor filter's foreign flow.
 
 One GetStockSummary call returns the whole market: ~963 rows with ticker, close, volume,
@@ -98,9 +102,16 @@ def normalise(row):
 
 
 def suspended(remarks):
-    """IDX marks a suspended name with a trailing 'X'. UMA names open '--U' and cannot be traded
-    either, so they go too. Everything else keeps its Remark for the evidence row."""
-    return remarks.endswith("X") or remarks.startswith("--U")
+    """IDX marks a suspended name with a trailing 'X'. 159 of 963 names on a real session.
+
+    Do NOT also treat a leading '--U' as UMA. Checked against a live payload: 611 of 963 rows
+    start with '--U', including obvious large caps (ABBA, ABDA, ADCP), so it is a general status
+    prefix, not a margin-product marker. Filtering on it silently deletes two thirds of the
+    market. trading-suite's app/idx.py makes that same reading — do not copy it here.
+
+    Everything else keeps its Remark for the evidence row.
+    """
+    return remarks.endswith("X")
 
 
 def fetch_summary(day=None):
@@ -129,11 +140,9 @@ def refresh(day=None):
         put_idx_day(key, rows)
     else:
         rows = idx_day(key)
-    live = [r for r in rows if not suspended(r["remarks"])]
-    cheap = [r for r in live if r["close"] is not None and 0 < r["close"] < MAX_PRICE]
-    print(f"session {key}: {len(rows)} with a price -> {len(live)} tradable "
-          f"-> {len(cheap)} under IDR {MAX_PRICE:.0f}")
-    return key, cheap
+    priced = [r for r in rows if r["close"] is not None]
+    print(f"session {key}: {len(rows)} listed, {len(priced)} with a price")
+    return key, priced
 
 
 def show(code):

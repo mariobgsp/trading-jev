@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
+# Modules in this directory import each other (tools.py, pivots.py, screen.py, jev.py, store.py,
+# idx.py). Pyright in this setup does not pick up pyrightconfig.json's extraPaths and reports every
+# one as missing, while the scripts resolve them fine at runtime. Verified by running the demos.
 """Significant swing highs — ATR-prominence pivots that do not repaint.
 
 "Last H" as a 20-bar high is useless on a ranging stock: the high is noise, so a cross through it
@@ -36,45 +40,53 @@ and rejects only 5 — the opposite of the intent. `prom_mult` is the effective 
 is secondary. That sweep measures signal FREQUENCY, not edge: fewer signals is not better signals.
 Tighten or loosen from the journal, not from this table.
 """
-import importlib.util
-import os
+from tools import screener
 
-# trading-tools is a plain directory, not an installed package, so load the one symbol we need
-# by explicit path. Set TRADING_TOOLS_DIR if it does not live beside this repo.
-TOOLS = os.environ.get("TRADING_TOOLS_DIR") or os.path.expanduser("~/Projects/trading-tools")
-_SCREENER = os.path.join(TOOLS, "ihsg-screener", "ihsg_screener.py")
-_spec = importlib.util.spec_from_file_location("ihsg_screener", _SCREENER)
-if _spec is None or _spec.loader is None:
-    raise SystemExit(f"cannot load {_SCREENER} — set TRADING_TOOLS_DIR")
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)  # puts trading-tools/ on sys.path for its own `common.net` import
-atr = _mod.atr
+atr = screener.atr
 
 
-def significant_highs(bars, lookback=20, confirm=3, prom_mult=3.5, standout_atr=2.0, n=14):
-    """Confirmed significant highs, oldest first. Every window is complete, so appending bars
-    never changes or removes a pivot that was already returned."""
+def _pivots(bars, is_high, lookback, confirm, prom_mult, standout_atr, n):
+    """One definition for both directions. For lows every value is negated, which turns the
+    significant-low case into the identical significant-high case — no second rule to drift."""
     if len(bars) < 2 * lookback + confirm + n + 1:
         return []
     a = atr(bars, n)
+    s = 1.0 if is_high else -1.0
+    pick = (lambda b: b["h"]) if is_high else (lambda b: b["l"])
+    # The reversal is measured from the pivot to the OPPOSITE field after it: a high is judged by
+    # the lowest low that follows, a low by the highest high. Using `pick` here instead measures
+    # high-to-high, which silently loosens the whole rule — that bug shipped briefly in this file.
+    other = (lambda b: b["l"]) if is_high else (lambda b: b["h"])
     out = []
     for i in range(lookback, len(bars) - lookback):
         av = a[i]
         if av is None or av <= 0:
             continue
-        h = bars[i]["h"]
-        prior = [bars[j]["h"] for j in range(i - lookback, i)]
-        if h < max(prior):
+        x = s * pick(bars[i])                       # in "up" space, high and low are one case
+        prior = [s * pick(bars[j]) for j in range(i - lookback, i)]
+        if x < max(prior):
             continue                                       # 1. not dominant
-        if h - sum(prior) / len(prior) < standout_atr * av:
+        if x - sum(prior) / len(prior) < standout_atr * av:
             continue                                       # 2. does not stand out
-        if any(bars[j]["h"] > h for j in range(i + 1, i + confirm + 1)):
-            continue                                       # 3. not a local max
-        trough = min(bars[j]["l"] for j in range(i + 1, i + lookback + 1))
-        if h - trough < prom_mult * av:
-            continue                                       # 4. pullback too shallow
-        out.append({"index": i, "high": h, "prominence": round((h - trough) / av, 2)})
+        if any(s * pick(bars[j]) > x for j in range(i + 1, i + confirm + 1)):
+            continue                                       # 3. not a local extreme
+        extreme = min(s * other(bars[j]) for j in range(i + 1, i + lookback + 1))
+        if x - extreme < prom_mult * av:
+            continue                                       # 4. reversal too shallow
+        out.append({"index": i, "high" if is_high else "low": x / s,
+                    "prominence": round((x - extreme) / av, 2)})
     return out
+
+
+def significant_highs(bars, lookback=20, confirm=3, prom_mult=3.5, standout_atr=2.0, n=14):
+    """Confirmed significant highs, oldest first. Every window is complete, so appending bars
+    never changes or removes a pivot that was already returned."""
+    return _pivots(bars, True, lookback, confirm, prom_mult, standout_atr, n)
+
+
+def significant_lows(bars, lookback=20, confirm=3, prom_mult=3.5, standout_atr=2.0, n=14):
+    """Confirmed significant lows, same rule and same parameters as the highs."""
+    return _pivots(bars, False, lookback, confirm, prom_mult, standout_atr, n)
 
 
 def last_significant_high(bars, pivots=None, **kw):
@@ -98,20 +110,33 @@ def hh_breakout(bars, pivots=None, **kw):
     return breakout(bars, sh, **kw)
 
 
+def lower_low(bars, pivots=None, **kw):
+    """Category 6: close below the last confirmed significant low. A descriptor, never a gate —
+    a lower low says where price is, not that the stock is tradeable."""
+    sl = pivots if pivots is not None else significant_lows(bars, **kw)
+    if not sl or bars[-1]["c"] >= sl[-1]["low"]:
+        return None
+    return {"level": sl[-1]["low"], "close": bars[-1]["c"], "pivot_index": sl[-1]["index"]}
+
+
 # ---------- self-check ----------
 def _bars(closes, half=0.5, v=1_000_000):
     return [{"o": c, "h": c + half, "l": c - half, "c": c, "v": v} for c in closes]
 
 
-def _trend():
-    """Three legs of impulse up + deep pullback, then a decline. Long enough that the peaks sit
-    well inside the data: a pivot needs `lookback` complete bars on each side."""
+def _trend_closes():
     out = []
     for base, peak in ((100, 140), (110, 150), (120, 160)):
         out += [base + 1.0 * k for k in range(40)]
         out += [peak - 2.0 * k for k in range(1, 11)]
     out += [160 - 3.0 * k for k in range(1, 26)]
-    return _bars(out, half=1.0)
+    return out
+
+
+def _trend():
+    """Three legs of impulse up + deep pullback, then a decline. Long enough that the peaks sit
+    well inside the data: a pivot needs `lookback` complete bars on each side."""
+    return _bars(_trend_closes(), half=1.0)
 
 
 def _flat(n=200):
@@ -145,6 +170,16 @@ def demo():
     # 4. windows are complete, so the newest pivot is always lookback bars back
     assert all(p["index"] <= len(t) - 1 - 20 for p in sh), "a pivot was returned with an incomplete window"
 
+    # 4b. prominence is the drop from the pivot HIGH to the lowest LOW after it, never high-to-high.
+    # A refactor once measured it high-to-high and the rule quietly loosened; this pins the field
+    # semantics so that cannot happen again unnoticed.
+    av = atr(t, 14)
+    for p in sh:
+        trough = min(b["l"] for b in t[p["index"] + 1:p["index"] + 21])
+        assert abs(p["prominence"] - round((p["high"] - trough) / av[p["index"]], 2)) < 0.02, (
+            f"prominence must be high-to-low, got {p} expected "
+            f"{round((p['high'] - trough) / av[p['index']], 2)}")
+
     # 5. the trend's last two pivots are rising — that is the higher-high structure (category 1)
     assert sh[-1]["high"] > sh[-2]["high"], f"last two pivots must be rising: {sh[-2:]}"
 
@@ -163,7 +198,29 @@ def demo():
     assert b["level"] == pivot["high"], f"breakout level wrong: {b}"
     assert b["close"] > b["level"], "breakout close must exceed the level"
 
-    print(f"pivots: trend={len(sh)} flat={len(significant_highs(f))}  OK")
+    # 8. the low side obeys the same rule: a downtrend makes significant lows, a range makes none
+    down = _bars(_trend_closes()[::-1], half=1.0)
+    sl = significant_lows(down)
+    assert len(sl) >= 2, f"downtrend must produce significant lows, got {len(sl)}"
+    assert all(p["prominence"] >= 3.5 for p in sl), f"low prominence floor: {sl}"
+    assert sl[-1]["low"] < sl[-2]["low"], f"the two last lows must be falling: {sl[-2:]}"
+    assert not significant_lows(f), "a ranging stock must produce no significant lows"
+    short_lows = significant_lows(down[:len(down) - 7])
+    full_lows = {p["index"]: p for p in sl}
+    for p in short_lows:
+        assert full_lows.get(p["index"], {}).get("low") == p["low"], (
+            f"low pivot {p['index']} repainted: {p} -> {full_lows.get(p['index'])}")
+
+    # 9. lower_low fires when the close is below the last significant low, quiet above it
+    last_low = sl[-1]["low"]
+    fired = lower_low(down)
+    assert fired is not None, f"close {down[-1]['c']} is below the significant low {last_low}"
+    assert fired["level"] == last_low, f"lower_low level wrong: {fired} vs {sl[-1]}"
+    assert fired["close"] < last_low, "lower_low close must sit below the level"
+    quiet = _bars([b["c"] for b in down] + [last_low + 50.0] * 5, half=1.0)
+    assert lower_low(quiet) is None, "a close above the significant low is not a lower low"
+
+    print(f"pivots: trend highs={len(sh)} lows={len(sl)} flat={len(significant_highs(f))}  OK")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
 # secrets — never commit
 .env
 
+# runtime data: the journal and its WAL are working data, not source
+*.db
+*.db-wal
+*.db-shm
+
 # run artifacts
 .result/
 *.log
