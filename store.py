@@ -20,7 +20,9 @@ import datetime
 import decimal
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -88,9 +90,31 @@ def conn():
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA busy_timeout=5000")
         c.executescript(SCHEMA)
+        _migrate(c)
         c.commit()
         _local.conn = c
     return c
+
+
+def _migrate(c):
+    """One-time, and then every open: make (session, ticker) unique on `decision`.
+
+    Without this a re-scan of the same session APPENDED, double-counting every name in `scored`,
+    the veto rate and the calibration buckets. The screen is deterministic for a given session, so
+    a re-scan must replace, never accumulate.
+
+    The dedupe has to happen before the index is created, since the duplicates are exactly what
+    makes the CREATE fail. Idempotent, and a no-op once the data is clean."""
+    dupes = c.execute(
+        "SELECT COUNT(*) n FROM (SELECT session, ticker FROM decision"
+        " GROUP BY session, ticker HAVING COUNT(*) > 1)").fetchone()["n"]
+    if dupes:
+        # keep the newest row per pair: a later scan reflects the current gate set
+        c.execute("DELETE FROM decision WHERE id NOT IN"
+                  " (SELECT MAX(id) FROM decision GROUP BY session, ticker)")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS decision_session_ticker"
+              " ON decision(session, ticker)")
+    return dupes
 
 
 # ---------- IDX snapshot ----------
@@ -191,12 +215,23 @@ def watchlist():
 
 # ---------- journal ----------
 def record(session, ticker, rendered, answers, action, plan, evidence):
-    """One scored candidate. `answers` is Jev's full response; `plan` is None on a SKIP."""
+    """One scored candidate. `answers` is Jev's full response; `plan` is None on a SKIP.
+
+    Upserts on (session, ticker): re-scanning a session replaces that ticker's decision rather
+    than adding a second one. The outcome triple is deliberately NOT in the DO UPDATE list, so a
+    trade that has already been scored keeps its result when the session is re-analysed.
+    """
     db = conn()
     db.execute(
         "INSERT INTO decision (run_ts, session, ticker, rendered, p_enter, verdict, momentum,"
         " conviction, risk, action, entry, stop, tp1, tp2, evidence)"
-        " VALUES (datetime('now'),?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " VALUES (datetime('now'),?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(session, ticker) DO UPDATE SET"
+        "  run_ts=excluded.run_ts, rendered=excluded.rendered, p_enter=excluded.p_enter,"
+        "  verdict=excluded.verdict, momentum=excluded.momentum,"
+        "  conviction=excluded.conviction, risk=excluded.risk, action=excluded.action,"
+        "  entry=excluded.entry, stop=excluded.stop, tp1=excluded.tp1, tp2=excluded.tp2,"
+        "  evidence=excluded.evidence",
         (session, ticker, rendered, answers["verdict"]["probabilities"]["enter"],
          answers["verdict"]["choice"], answers["momentum_confirmed"]["noul"],
          answers["conviction"]["score"], answers["risk"]["choice"], action,
@@ -381,5 +416,49 @@ def session_ts(session):
     return calendar.timegm((y, m, d, 0, 0, 0, 0, 0, 0))
 
 
+# ---------- self-check ----------
+def demo():
+    """Assert the journal's central invariant: one decision per ticker per session.
+
+    Re-scanning a session must REPLACE, not append. This is the check that would have caught the
+    double-counted `scored`, veto rate and calibration buckets. Runs against a temp database, so
+    it can never touch the real journal."""
+    global DB
+    real_db = DB
+    saved = getattr(_local, "conn", None)
+    workdir = tempfile.mkdtemp(prefix="jev-demo-")
+    DB = os.path.join(workdir, "demo.db")
+    _local.conn = None
+    try:
+        skip = {"verdict": {"choice": "skip", "probabilities": {"enter": 0.10, "skip": 0.90}},
+                "momentum_confirmed": {"noul": 0.4}, "conviction": {"score": 1.0},
+                "risk": {"choice": "low"}}
+        record("20260925", "AAAA", "prose", skip, "SKIP", None, {"n": 1})
+        record("20260925", "AAAA", "prose", skip, "SKIP", None, {"n": 2})
+        n = conn().execute("SELECT COUNT(*) n FROM decision").fetchone()["n"]
+        assert n == 1, f"re-journalling one session doubled it: {n} rows"
+
+        conn().execute("UPDATE decision SET outcome='tp1', outcome_pct=5.0, bars_held=3")
+        conn().commit()
+        plan = {"entry": 100, "stop": 95, "tp1": 105, "tp2": 110}
+        record("20260925", "AAAA", "prose", skip, "ENTER", plan, {"n": 3})
+        d = conn().execute("SELECT * FROM decision").fetchone()
+        assert d["action"] == "ENTER", "the re-scan must replace the decision"
+        assert d["evidence"] == '{"n":3}', "the re-scan must replace the evidence"
+        assert d["outcome"] == "tp1", "an already-resolved outcome must survive a re-scan"
+        assert conn().execute("SELECT COUNT(*) n FROM decision").fetchone()["n"] == 1
+
+        record("20260926", "AAAA", "prose", skip, "SKIP", None, {"n": 4})
+        n = conn().execute("SELECT COUNT(*) n FROM decision").fetchone()["n"]
+        assert n == 2, f"a new session must add a row: {n}"
+    finally:
+        DB = real_db
+        _local.conn = saved
+        shutil.rmtree(workdir, ignore_errors=True)
+    print("store: one decision per session+ticker  OK")
+
+
 if __name__ == "__main__":
+    demo()
+    print()
     print_report(report())
