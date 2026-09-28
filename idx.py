@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # pyright: reportMissingImports=false
-# The modules in this directory import each other (store.py, pivots.py, jev.py). Pyright in this
+# The modules in this directory import each other (store.py, pivots.py, decider.py). Pyright in this
 # setup does not pick up pyrightconfig.json's extraPaths and reports every one as missing, while
 # `python3 idx.py` resolves them fine. Verified: the import works, the tables create, the tests run.
 """IDX end-of-day summary — universe, suspended filter, and the actor filter's foreign flow.

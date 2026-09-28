@@ -1,5 +1,5 @@
 # pyright: reportMissingImports=false
-"""The pipeline: IDX -> pre-gates -> the required gate -> rank -> Jev -> journal.
+"""The pipeline: IDX -> pre-gates -> the required gate -> rank -> decider -> journal.
 
 Layer 1 and 2 of the plan. Only the decision (layer 3) and the journal write (layer 4) are new
 code; the data, the indicators and the entry plan all come from trading-tools.
@@ -10,7 +10,7 @@ what keeps the polite fetch count sane.
 
 Usage:
   python3 run.py screen --limit 200        # universe -> shortlist, no API calls
-  python3 run.py run --limit 200 --top 15  # ...then ask Jev and journal every answer
+  python3 run.py run --limit 200 --top 15  # ...then ask the decider and journal every answer
   python3 run.py watchlist                 # every name ever surfaced, and what it did after
   python3 run.py resolve                   # fill outcomes for ENTER decisions
   python3 run.py analyze --since 7d        # this week's performance; 30d, 90d, all
@@ -19,8 +19,8 @@ import argparse
 import concurrent.futures
 import sys
 
+import decider
 import idx
-import jev
 import screen
 import store
 from tools import bars_for
@@ -105,23 +105,24 @@ def _rank_key(v):
     return (-v["rank_score"], -(v["context"]["obv_slope"] or 0), v["code"])
 
 
-def ask_jev(session, passed, top):
-    """Ask Jev about the shortlist and journal every answer, ENTER and SKIP alike. The SKIP rows
-    are the journal's real content: they are what makes 'how often does Jev say no' answerable."""
+def ask_decider(session, passed, top, backend=None):
+    """Ask the decider about the shortlist and journal every answer, ENTER and SKIP alike. The
+    SKIP rows are the journal's real content: they are what makes 'how often does it say no'
+    answerable. `backend=None` is whatever JEV_BACKEND selects; --backend overrides it for one
+    run, and the row records which one answered so two backends can be compared later."""
     ranked = sorted(passed, key=_rank_key)[:top]
-    print(f"asking Jev about {len(ranked)} of {len(passed)}")
+    print(f"asking the decider about {len(ranked)} of {len(passed)}")
     decided = 0
     for v in ranked:
         code = v["code"]
         state = screen.candidate_state(code, v)
         try:
-            resp = jev.ask(jev.render(state))
-        except jev.JevError as e:
+            resp = decider.ask(decider.render(state), backend=backend)
+        except decider.DeciderError as e:
             print(f"  {code}: {e}")
             continue
         answers = resp["answers"]
-        jev.check(answers)
-        action, p = jev.decide(answers)
+        action, p = decider.decide(answers)
         plan = None
         if action == "ENTER":
             try:
@@ -129,6 +130,8 @@ def ask_jev(session, passed, top):
             except Exception as e:  # noqa: BLE001
                 print(f"  {code}: no entry plan ({type(e).__name__})")
         store.record(session, code, "prose", answers, action, plan, {
+            "backend": resp["backend"],
+            "model": resp.get("model"),
             "required_passed": v["required_passed"],
             "rank_signals": v["rank_signals"],
             "rank_score": v["rank_score"],
@@ -145,7 +148,7 @@ def ask_jev(session, passed, top):
 
 def screener_plan(code):
     """The YES branch's entry plan. Already implemented in trading-tools: stop 1.5xATR, TP1 1R,
-    TP2 2R. Jev never computes this — it cannot return a price."""
+    TP2 2R. The decider never computes this — it cannot return a price."""
     from tools import screener
     return screener.plan(bars_for(code))
 
@@ -156,7 +159,7 @@ def forward_perf(bars, session, horizons=(5, 10, 20)):
     before the watchlist decision.
 
     Reports the return at each horizon plus the best and worst excursion. MFE/MAE matter because
-    a veto can be wrong in two different ways: the name went up and Jev missed it (bad), or it
+    a veto can be wrong in two different ways: the name went up and the decider missed it (bad), or it
     dipped before running (not bad, just early). Return alone cannot tell those apart.
     """
     start = None
@@ -266,7 +269,9 @@ def main():
     for name in ("screen", "run"):
         p = sub.add_parser(name)
         p.add_argument("--limit", type=int, default=200, help="max candidates to fetch bars for")
-        p.add_argument("--top", type=int, default=15, help="max to send to Jev")
+        p.add_argument("--top", type=int, default=15, help="max to send to the decider")
+        p.add_argument("--backend", choices=decider.BACKENDS, default=None,
+                       help="override JEV_BACKEND for this run")
         p.add_argument("--news", action="store_true", help="also score news (1 request per ticker)")
     sub.add_parser("resolve")
     wl = sub.add_parser("watchlist")
@@ -294,7 +299,7 @@ def main():
             print()
         store.print_report(store.report(since), per_decision=not a.short)
         if not a.short:
-            print("\ncohort — what every surfaced name did, including the ones Jev vetoed:")
+            print("\ncohort — what every surfaced name did, including the ones the decider vetoed:")
             print_watchlist(_watchlist_rows(not a.no_perf))
         return 0
     if a.cmd not in ("screen", "run"):
@@ -302,14 +307,14 @@ def main():
 
     session, passed = screen_universe(a.limit, a.news)
     if not passed:
-        return print("no candidate cleared the required gate — nothing for Jev")
+        return print("no candidate cleared the required gate — nothing for the decider")
     for v in sorted(passed, key=_rank_key)[:10]:
         c = v["context"]
         print(f"  {v['code']:6} {v['name'][:26]:26} close={c['close']:>8,.0f} "
               f"rsi={c['rsi']:.0f} pivot={c['pivot_high']} rank={v['rank_score']} "
               f"{','.join(v['rank_signals'])}")
     if a.cmd == "run":
-        n = ask_jev(session, passed, a.top)
+        n = ask_decider(session, passed, a.top, a.backend)
         print(f"journalled {n} decisions (session {session}) — "
               f"`run.py analyze --since 7d` scores them")
 

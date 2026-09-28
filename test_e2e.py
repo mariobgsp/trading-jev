@@ -165,6 +165,7 @@ class ApiTest(unittest.TestCase):
         self.assertIsInstance(h["has_key"], bool)
         self.assertIn("latest_session", h)
         self.assertIsInstance(h["decisions"], int)
+        self.assertIn(h["backend"], ("structured", "chat"))
 
     def test_health_never_leaks_the_key(self):
         _, body, _ = _get("/api/health")

@@ -106,6 +106,25 @@ kills trades:
 - The free tier is blocked on the provider's chat-shaped endpoint but **not** on the structured
   one this project uses. Verified working.
 
+**Two backends, one contract** (`decider.py`, `JEV_BACKEND` picks one; `run.py --backend`
+overrides per run). `structured` is the typed endpoint above. `chat` posts the same five
+questions to a chat-completions model as a literal JSON template and coerces the reply into the
+identical typed shape — `type` and `legend` come from the question spec, `choice` is the argmax of
+the returned distribution, missing or zeroed probabilities raise rather than default. Both
+return `{model, backend, answers, usage}` and every `decision.evidence` row records the backend
+and the model id, so the journal can score one against the other and never blends two models in
+one calibration table. Measured on one candidate (BBCA.JK, `jev-1.13-free` vs
+`mimo-v2.6-flash`): structured 607 in / 120 out, chat 744 in / 485 out, and the two agreed to
+0.02 on the enter probability (0.60 vs 0.62), same verdict, same rubric band. That is n=1 — the
+calibration report, not this, is the measurement that decides. The chat leg is a comparison, not
+the default.
+The chat endpoint is reached directly with its own key, not through a local router: its account
+tier rejects the structured endpoint's key outright, so each backend carries its own
+`JEV_*_KEY`/`JEV_*_URL` pair and `JEV_BACKEND` picks the pair. Its gateway also requires an
+`x-opencode-session` header and rejects the stdlib's default `User-Agent` (Cloudflare 1010);
+`_post` sends both. A model that will not answer in the contract shape fails loudly, which is the
+intended outcome: a fabricated probability is a fabricated trade.
+
 Questions to ask per candidate:
 
 | question | type | purpose |
@@ -233,7 +252,7 @@ Not a broker. No orders are placed. Every run writes decisions; a human presses 
 | `idx.py` | `GetStockSummary` over stdlib http.client — universe, suspended filter, float, foreign flow |
 | `store.py` | SQLite: `idx_daily` (also the 24h cache), `scan` (coverage), `decision` (the journal), plus `report()` and `watchlist()` |
 | `screen.py` | the 21 categories, the required gate, the rank score |
-| `jev.py` | the decision client and the 5 typed questions |
+| `decider.py` | the decision client, the 5 typed questions, both backends |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `analyze` |
 
 ```bash
@@ -243,7 +262,7 @@ python3 run.py watchlist                 # every name ever surfaced, and what it
 python3 run.py analyze --since 7d        # this week; 30d, 90d, all, or YYYY-MM-DD
 python3 run.py resolve                   # just refill outcomes
 python3 pivots.py demo                   # no network
-python3 jev.py demo                      # one real call
+python3 decider.py demo                   # one real call per backend
 ```
 
 `analyze` resolves anything pending, then reports over the window: scored / entered / vetoed,

@@ -34,8 +34,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)   # noqa: E402 - a module run from another cwd still finds its siblings
+import decider  # noqa: E402
 import idx  # noqa: E402
-import jev  # noqa: E402
 import screen  # noqa: E402
 import store  # noqa: E402
 from tools import bars_for  # noqa: E402
@@ -106,7 +106,12 @@ def get_job(jid):
 
 # ---------- API ----------
 def api_health():
-    return {"ok": True, "has_key": jev.has_credentials(),
+    try:
+        backend = decider.configured_backend()
+    except decider.DeciderError as e:   # a typo in JEV_BACKEND must not 500 the health probe
+        backend = f"unavailable: {e}"
+    return {"ok": True, "has_key": backend in decider.BACKENDS and decider.has_credentials(),
+            "backend": backend,
             "latest_session": (store.idx_sessions() or [None])[0],
             "decisions": store.conn().execute("SELECT COUNT(*) FROM decision").fetchone()[0]}
 
@@ -136,15 +141,14 @@ def api_deepdive(ticker):
         raise ValueError(f"{ticker} could not be evaluated")
 
     state = screen.candidate_state(ticker, v)
-    prose = jev.render(state)
+    prose = decider.render(state)
     answer = None
     try:
-        resp = jev.ask(prose)
-        jev.check(resp["answers"])
-        action, p = jev.decide(resp["answers"])
+        resp = decider.ask(prose)
+        action, p = decider.decide(resp["answers"])
         answer = {"action": action, "p_enter": p, "answers": resp["answers"],
                   "usage": resp["usage"], "journalled": False}
-    except jev.JevError as e:
+    except decider.DeciderError as e:
         answer = {"action": None, "error": str(e), "journalled": False}
 
     piv = significant_highs(bars)

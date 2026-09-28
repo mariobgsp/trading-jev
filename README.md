@@ -22,15 +22,16 @@ were. This file is how to run it.
   borrows its verified indicators, its Yahoo fetcher and its entry plan rather than
   reimplementing them. If yours lives elsewhere, set `TRADING_TOOLS_DIR`.
 - **A credential for the decision endpoint.** Nothing about the provider is written down here:
-  the key, the endpoint URL and the model id all live in `.env`. The model this project runs on
-  is only served on the structured endpoint, not the provider's chat-shaped one, so an endpoint
-  that works elsewhere is not necessarily the right one.
+  the key, the endpoint URL and the model id all live in `.env`, as does the backend choice. The
+  structured backend's model is only served on its own endpoint, not on the provider's
+  chat-shaped one, so an endpoint that works elsewhere is not necessarily the right one — which
+  is why there are two backends rather than one.
 
 ## Setup
 
 ```bash
 cp .env.example .env      # then put your key in it
-$EDITOR .env              # JEV_API_KEY / JEV_API_URL / JEV_MODEL
+$EDITOR .env              # JEV_API_KEY / JEV_BACKEND / JEV_API_URL / JEV_MODEL / JEV_CHAT_*
 ```
 
 Or skip the file entirely if your shell already exports them: `export JEV_API_KEY=...`.
@@ -41,7 +42,7 @@ Check the moving parts before trusting a run:
 ```bash
 python3 pivots.py demo    # pivot rule, no network
 python3 store.py          # the journal invariant, on a temp database
-python3 jev.py demo       # one real Jev call, prints both state renderings
+python3 decider.py demo   # one real call per backend, same answer contract
 python3 idx.py refresh    # the IDX snapshot, prints the filter funnel
 ```
 
@@ -70,7 +71,7 @@ flowchart TD
         TT["trading-tools<br/>indicators, ATR plan"]
     end
     subgraph DECIDE["decide (layer 3)"]
-        JV["jev.py<br/>5 typed questions"]
+        JV["decider.py<br/>5 typed questions"]
     end
     subgraph LAYER4["journal (layer 4)"]
         DB[("trading-jev.db<br/>decision, idx_daily, scan")]
@@ -215,7 +216,7 @@ A name counts as `EXCLUDED` only if a **complete** scan ran without it. A partia
 |---|---|
 | data | `idx.py` — IDX snapshot and foreign flow; `tools.py` — Yahoo bars |
 | screen | `pivots.py` + `screen.py` — significant highs/lows, the 23 categories |
-| decide | `jev.py` — five typed questions, one call to the configured endpoint |
+| decide | `decider.py` — five typed questions, one call, two interchangeable backends |
 | journal | `store.py` — the SQLite record everything is scored from |
 
 **Two required gates** — both must pass:
@@ -246,6 +247,17 @@ The rest are descriptors — context Jev reads, recorded in the evidence row so 
 Jev **cannot compute a price**. It returns typed values only, so the entry plan is Python's job
 (`stop = entry − 1.5·ATR`, TP1 1R, TP2 2R) and travels with the decision. The no-trade rule is
 `verdict.probabilities.enter < 0.6` — a number, not a mood.
+
+**Two backends, one contract.** `decider.py` does not know which model it is talking to. The
+decision endpoint (`JEV_BACKEND=structured`) returns typed values natively; a plain chat model
+(`JEV_BACKEND=chat`) is handed the same contract as a JSON template and its reply is coerced into
+the same typed shape — a missing or zeroed probability distribution is an error, never a
+default, because ENTER is a threshold on that number. Both return
+`{model, backend, answers, usage}`, both pass the same `check()`, and every journalled row records
+which backend and which model answered, so the two can be scored against each other. Measured on
+one candidate: structured 607 in / 120 out, chat 744 in / 485 out, agreeing to 0.02 on the enter
+probability (0.60 vs 0.62) with the same verdict — n=1, so trust the calibration report over
+this. Switch with `JEV_BACKEND` in `.env`, or `run.py run --backend chat` for one run.
 
 ---
 
@@ -343,7 +355,7 @@ a new laptop does not look like a broken install.
 | `idx.py` | IDX end-of-day summary: universe, suspended filter, float, foreign flow |
 | `pivots.py` | significant highs and lows; self-check proves no repainting |
 | `screen.py` | the 23 categories, the two required gates, the rank score |
-| `jev.py` | the decision client and the five questions |
+| `decider.py` | the decision client, the five questions, and both backends |
 | `store.py` | SQLite: `idx_daily`, `scan`, `decision`; `report()` and `watchlist()` |
 | `run.py` | the pipeline: `screen` · `run` · `resolve` · `watchlist` · `analyze` |
 | `serve.py` | the local web app: deepdive, scan, journal |

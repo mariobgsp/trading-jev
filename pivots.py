@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # pyright: reportMissingImports=false
-# Modules in this directory import each other (tools.py, pivots.py, screen.py, jev.py, store.py,
+# Modules in this directory import each other (tools.py, pivots.py, screen.py, decider.py, store.py,
 # idx.py). Pyright in this setup does not pick up pyrightconfig.json's extraPaths and reports every
 # one as missing, while the scripts resolve them fine at runtime. Verified by running the demos.
 """Significant swing highs — ATR-prominence pivots that do not repaint.
