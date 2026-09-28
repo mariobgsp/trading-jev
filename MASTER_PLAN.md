@@ -106,7 +106,7 @@ kills trades:
 - The free tier is blocked on the provider's chat-shaped endpoint but **not** on the structured
   one this project uses. Verified working.
 
-**Two backends, one contract** (`decider.py`, `JEV_BACKEND` picks one; `run.py --backend`
+**Alternative: two backends, one contract** (`decider.py`, `JEV_BACKEND` picks one; `run.py --backend`
 overrides per run). `structured` is the typed endpoint above. `chat` posts the same five
 questions to a chat-completions model as a literal JSON template and coerces the reply into the
 identical typed shape — `type` and `legend` come from the question spec, `choice` is the argmax of

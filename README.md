@@ -22,16 +22,16 @@ were. This file is how to run it.
   borrows its verified indicators, its Yahoo fetcher and its entry plan rather than
   reimplementing them. If yours lives elsewhere, set `TRADING_TOOLS_DIR`.
 - **A credential for the decision endpoint.** Nothing about the provider is written down here:
-  the key, the endpoint URL and the model id all live in `.env`, as does the backend choice. The
-  structured backend's model is only served on its own endpoint, not on the provider's
-  chat-shaped one, so an endpoint that works elsewhere is not necessarily the right one — which
-  is why there are two backends rather than one.
+  the key, the endpoint URL and the model id all live in `.env`. The structured model is only
+  served on its own endpoint, not on the provider's chat-shaped one, so an endpoint that works
+  elsewhere is not necessarily the right one. Jev is what this project runs on; deciding with a
+  chat model instead is an [alternative](#alternative-swap-the-decider-for-a-chat-model).
 
 ## Setup
 
 ```bash
 cp .env.example .env      # then put your key in it
-$EDITOR .env              # JEV_API_KEY / JEV_BACKEND / JEV_API_URL / JEV_MODEL / JEV_CHAT_*
+$EDITOR .env              # JEV_API_KEY / JEV_API_URL / JEV_MODEL   (JEV_CHAT_* is the alternative)
 ```
 
 Or skip the file entirely if your shell already exports them: `export JEV_API_KEY=...`.
@@ -248,16 +248,45 @@ Jev **cannot compute a price**. It returns typed values only, so the entry plan 
 (`stop = entry − 1.5·ATR`, TP1 1R, TP2 2R) and travels with the decision. The no-trade rule is
 `verdict.probabilities.enter < 0.6` — a number, not a mood.
 
-**Two backends, one contract.** `decider.py` does not know which model it is talking to. The
-decision endpoint (`JEV_BACKEND=structured`) returns typed values natively; a plain chat model
-(`JEV_BACKEND=chat`) is handed the same contract as a JSON template and its reply is coerced into
-the same typed shape — a missing or zeroed probability distribution is an error, never a
-default, because ENTER is a threshold on that number. Both return
+**Two backends, one contract.** Jev is what this project runs on. Because the typed reply is
+coerced into a shape `decider.py` owns rather than Jev's, the decider can be swapped for a chat
+model without touching the pipeline, the journal's schema or `check()`. That swap is an
+**alternative** — see [Alternative](#alternative-swap-the-decider-for-a-chat-model) — kept
+working and measured rather than deleted.
+
+### Alternative: swap the decider for a chat model
+
+`JEV_BACKEND=chat` hands a chat-completions model the same five questions as a literal JSON
+template and coerces its reply into the identical typed shape. The model's own `type` and `legend`
+are discarded — the rubric is ours, not its opinion — `choice` is the argmax of the distribution
+it returns, and a missing or zeroed probability distribution is an error rather than a default,
+because ENTER is a threshold on that number. Both backends return
 `{model, backend, answers, usage}`, both pass the same `check()`, and every journalled row records
-which backend and which model answered, so the two can be scored against each other. Measured on
-one candidate: structured 607 in / 120 out, chat 744 in / 485 out, agreeing to 0.02 on the enter
-probability (0.60 vs 0.62) with the same verdict — n=1, so trust the calibration report over
-this. Switch with `JEV_BACKEND` in `.env`, or `run.py run --backend chat` for one run.
+which backend and which model answered, so two models can be scored against each other instead of
+being blended.
+
+It is an alternative, not the default, and the reason is latency. Jev is a purpose-built
+classifier that emits a flat ~120 output tokens; a chat model reasons first and answers second,
+and output tokens are what cost seconds:
+
+| decider | latency | in | out |
+| --- | --- | --- | --- |
+| `jev-1.13-free` (`structured`) | 1.7s / 5.6s | 607 | 120 / 120 |
+| `mimo-v2.6-flash` (`chat`) | 7.6s / 17.8s | 744 | 369 / 947 |
+
+On one candidate the two agreed to 0.02 on the enter probability (0.60 vs 0.62) with the same
+verdict — n=1, so trust the calibration report over this. Two things the table does not show:
+"flash" in a model name says nothing about latency (on this prompt `qwen3.8-flash` took 37s for
+2070 output tokens and `glm-5.3-flash` 43s for 1405, both worse than the model above, and
+`minimax-m2.7` rejected the protocol outright), and swapping models swaps decisions — the same
+candidate scored 0.38, 0.55, 0.62 and 0.68 across four models. A swap is cheap mechanically and
+expensive statistically: pick one and let the journal calibrate it.
+
+To use it, set `JEV_BACKEND=chat` in `.env` with its own `JEV_CHAT_URL` / `JEV_CHAT_MODEL` /
+`JEV_CHAT_KEY` — a key from one account tier is rejected by the other, so the pairs do not share
+a credential — or `run.py run --backend chat` for a single run. The chat endpoint's gateway
+requires an `x-opencode-session` header and rejects the standard library's default `User-Agent`;
+`_post` sends both.
 
 ---
 
