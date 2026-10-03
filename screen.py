@@ -203,17 +203,43 @@ def evaluate(code, bars, index_bars=None, flow=None, news=None):
         "context": {
             "close": close, "rsi": x["rsi"]["rsi"], "adx": screener.adx(bars)[-1],
             "obv_slope": oslope, "relative_strength": rs, "expansion": exp,
-            "foreign_net": net, "base": base_ev, "crosses": x, "adv20": adv,
+            "foreign_net": net,
+            "foreign_net_sessions": (flow or {}).get("sessions"), "base": base_ev, "crosses": x, "adv20": adv,
             "breakout": bo, "lower_low": ll, "pivot_high": (bo or {}).get("level"),
         },
     }
 
 
-def candidate_state(code, verdict):
-    """The dict handed to Jev. Only the fields the questions actually ask about — a state padded
-    with 40 numbers is how a model ends up confident about something nobody asked it."""
+def entry_plan(code):
+    """The entry plan for one candidate: entry, stop, tp1, tp2 and the stop as a percent of entry.
+
+    It lives here, next to the state, because the decider is asked to judge the stop and the
+    targets. Computing it is pure arithmetic over the bars we already hold, so there is no reason
+    to withhold it from the decision and let the prose fall back to a placeholder. The decider
+    still never computes a price itself — it only reads this one.
+    """
+    from tools import bars_for
+    return screener.plan(bars_for(code))
+
+
+def candidate_state(code, verdict, plan=None):
+    """The dict handed to the decider. Only the fields the questions actually ask about — a state
+    padded with 40 numbers is how a model ends up confident about something nobody asked it.
+
+    `plan` is this candidate's entry plan, so `verdict`'s "stop defines the risk" criterion has a
+    real stop to reason about. Absent inputs stay None all the way through to `decider.render`,
+    which states the gap in the prose rather than inventing a value: a fabricated 0.0% stop and a
+    fabricated flat flow were both reaching the model on every live decision.
+    """
     c = verdict["context"]
     lvl = c.get("pivot_high")
+    stop_pct = targets_r = None
+    if plan:
+        entry = plan["entry"]
+        risk = entry - plan["stop"]
+        if risk:
+            stop_pct = plan["risk_pct"]
+            targets_r = [round((plan[k] - entry) / risk, 2) for k in ("tp1", "tp2")]
     return {
         "ticker": f"{code}.JK",
         "tf": "1d",
@@ -221,8 +247,12 @@ def candidate_state(code, verdict):
         "rsi": c["rsi"],
         "obv_slope_20d": c["obv_slope"],
         "distance_to_significant_high_pct": (c["close"] - lvl) / lvl * 100 if lvl else None,
-        "foreign_net_buy_pct": ((c["foreign_net"] or 0)
-                                / 100_000_000) if c["foreign_net"] is not None else None,
+        # IDX foreign net is raw rupiah, so this is hundreds of millions of IDR, not a percent
+        "foreign_net_100m_idr": (c["foreign_net"] / 100_000_000
+                                 if c["foreign_net"] is not None else None),
+        "foreign_net_sessions": c.get("foreign_net_sessions"),
+        "stop_pct": stop_pct,
+        "targets_r": targets_r,
         "rank_score": verdict["rank_score"],
         "rank_signals": verdict["rank_signals"],
         "adv20_bn": (c["adv20"] or 0) / 1e9,

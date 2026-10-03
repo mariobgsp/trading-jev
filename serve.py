@@ -110,8 +110,9 @@ def api_health():
         backend = decider.configured_backend()
     except decider.DeciderError as e:   # a typo in JEV_BACKEND must not 500 the health probe
         backend = f"unavailable: {e}"
+    ready, detail = decider.status() if backend in decider.BACKENDS else (False, "backend unusable")
     return {"ok": True, "has_key": backend in decider.BACKENDS and decider.has_credentials(),
-            "backend": backend,
+            "backend": backend, "decider_ready": ready, "decider_detail": detail,
             "latest_session": (store.idx_sessions() or [None])[0],
             "decisions": store.conn().execute("SELECT COUNT(*) FROM decision").fetchone()[0]}
 
@@ -140,7 +141,11 @@ def api_deepdive(ticker):
     if v is None:
         raise ValueError(f"{ticker} could not be evaluated")
 
-    state = screen.candidate_state(ticker, v)
+    try:
+        plan = screen.entry_plan(ticker)
+    except Exception:  # noqa: BLE001
+        plan = None
+    state = screen.candidate_state(ticker, v, plan)
     prose = decider.render(state)
     answer = None
     try:
@@ -152,13 +157,6 @@ def api_deepdive(ticker):
         answer = {"action": None, "error": str(e), "journalled": False}
 
     piv = significant_highs(bars)
-    plan = None
-    if v["passed"]:
-        from run import screener_plan
-        try:
-            plan = screener_plan(ticker)
-        except Exception:  # noqa: BLE001
-            plan = None
 
     return {
         "ticker": ticker,
@@ -177,7 +175,9 @@ def api_deepdive(ticker):
         "context": v["context"],
         "state": state,
         "prose": prose,
-        "plan": plan,
+        # a plan is only shown for a candidate that cleared the gates; the decider is shown it either
+        # way, because it is asked to judge the stop
+        "plan": plan if v["passed"] else None,
         "jev": answer,
     }
 

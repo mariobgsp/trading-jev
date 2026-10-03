@@ -52,10 +52,16 @@ QUESTIONS = {
     "p_enter": {
         "type": "noul",
         "instructions": "Probability this trade is profitable over the next 10 bars",
+        # Both outcomes are authored rather than derived. A decision model is told what yes and
+        # no each mean, and "not profitable" is a different claim from "this cannot work".
+        "yes": "The trade is profitable over the next 10 bars.",
+        "no": "The trade is not profitable over the next 10 bars.",
     },
     "momentum_confirmed": {
         "type": "noul",
         "instructions": "Is price-volume momentum confirmed by the bars themselves?",
+        "yes": "The bars themselves confirm price-volume momentum.",
+        "no": "The bars themselves do not confirm price-volume momentum.",
     },
     "conviction": {
         "type": "score",
@@ -117,6 +123,46 @@ def configured_backend():
     return b
 
 
+def endpoint(backend=None):
+    """The configured URL for a backend, or None. Public because the health probe has to reach
+    the endpoint to find out whether it is actually answering."""
+    name = "JEV_CHAT_URL" if (backend or configured_backend()) == "chat" else "JEV_API_URL"
+    return _env(name)
+
+
+def status(backend=None, timeout=1.5):
+    """-> (ready, detail). Is the decision endpoint actually answering?
+
+    A local model service is a process that can be down, still loading, or wedged, and an env var
+    being set says nothing about any of that. A loopback endpoint is therefore really contacted;
+    a remote one is only checked for credentials, because probing a third party on every health
+    call would be rude and slow. The URL is never echoed back — the health response must not
+    disclose the endpoint.
+    """
+    which = backend or configured_backend()
+    url = endpoint(which)
+    if not url:
+        return False, "no endpoint configured"
+    parts = urllib.parse.urlparse(url)
+    if parts.hostname not in ("127.0.0.1", "localhost", "::1"):
+        return has_credentials(which), "remote endpoint: credentials checked, not contacted"
+    path = "/health"
+    try:
+        if parts.scheme == "https":
+            conn = http.client.HTTPSConnection(parts.netloc, timeout=timeout)
+        else:
+            conn = http.client.HTTPConnection(parts.netloc, timeout=timeout)
+        try:
+            conn.request("GET", path, headers={"User-Agent": "trading-jev/1.0"})
+            resp = conn.getresponse()
+            resp.read()
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException) as e:
+        return False, f"local decider unreachable: {type(e).__name__}"
+    return resp.status < 400, f"local decider: HTTP {resp.status}"
+
+
 def has_credentials(backend=None):
     """True when the named backend (or the configured one) has everything it needs. The health
     endpoint uses this so the UI can say why the decider is unavailable instead of raising on a
@@ -130,11 +176,17 @@ def has_credentials(backend=None):
 
 
 def _endpoint(name):
-    """The only URL this client will ever talk to, audited: https and nothing else."""
+    """The only URL this client will ever talk to, audited: https, except loopback.
+
+    A local decision model is a process on this machine speaking plain HTTP on 127.0.0.1, so the
+    exception is scoped to exactly that. Anywhere else, the token still cannot leave in the clear.
+    """
     url = _setting(name)
     parts = urllib.parse.urlsplit(url)
-    if parts.scheme != "https":
+    if parts.scheme not in ("https", "http"):
         raise DeciderError(f"refusing {parts.scheme or 'no'} scheme: {url}")
+    if parts.scheme == "http" and parts.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise DeciderError(f"refusing plaintext {parts.scheme} to a non-loopback host: {url}")
     return parts
 
 
@@ -164,7 +216,15 @@ def _post(url_name, key_name, body, timeout):
     """
     parts = _endpoint(url_name)
     path = parts.path + (f"?{parts.query}" if parts.query else "")
-    conn = http.client.HTTPSConnection(parts.netloc, timeout=timeout)
+    # HTTPS unless the endpoint is loopback. A local model service speaks plain HTTP, and allowing
+    # that only for 127.0.0.1 keeps "never put a bearer token on the wire in the clear to a
+    # remote host" a property of the code rather than a convention.
+    loopback = parts.hostname in ("127.0.0.1", "localhost", "::1")
+    if parts.scheme != "https" and not loopback:
+        raise DeciderError(f"{url_name}: refusing to send a key over {parts.scheme}")
+    factory = (http.client.HTTPSConnection if parts.scheme == "https"
+               else http.client.HTTPConnection)
+    conn = factory(parts.netloc, timeout=timeout)
     try:
         conn.request("POST", path, body=json.dumps(body).encode(), headers={
             "Authorization": "Bearer " + _setting(key_name),
@@ -395,11 +455,8 @@ def render(candidate):
 
     rsi = n("rsi", 50.0)
     obv = n("obv_slope_20d", 0.0)
-    ff = n("foreign_net_buy_20d_pct", 0.0)
     gap = n("distance_to_significant_high_pct", 0.0)
-    targets = t.get("targets_r") or [1, 2]
     rsi_word = "overbought" if rsi >= 70 else "oversold" if rsi <= 30 else "neutral"
-    flow_word = "accumulation" if ff > 0 else "distribution" if ff < 0 else "flat foreign flow"
     if t.get("distance_to_significant_high_pct") is None:
         # No pivot at all. Saying "at its last significant high" here would be a plain
         # untruth fed to the model, so say what is actually true: there isn't one.
@@ -410,14 +467,26 @@ def render(candidate):
         where = f"{abs(gap):.1f}% ABOVE its last confirmed significant high"
     else:
         where = f"{gap:.1f}% below its last confirmed significant high"
+    # Foreign flow and the entry plan are the two inputs most often absent, and both used to be
+    # rendered as confident fiction — a flat flow, a 0.0% stop, a generic 1R/2R — which the model
+    # then judged `verdict`'s "stop defines the risk" against. A gap is stated, never filled in.
+    ff, sessions = t.get("foreign_net_100m_idr"), t.get("foreign_net_sessions")
+    if ff is None:
+        flow = "Foreign flow not available."
+    else:
+        window = f" over the last {sessions} sessions" if sessions else ""
+        flow = (f"Foreign net buy {ff:+.1f} (100M IDR){window} "
+                f"({'accumulation' if ff > 0 else 'distribution' if ff < 0 else 'flat'}).")
+    stop, targets = t.get("stop_pct"), t.get("targets_r")
+    risk = ("No entry plan was computed for this candidate, so no stop or target is known."
+            if stop is None or not targets else
+            f"Stop {stop:.1f}% below entry, targets at "
+            f"{', '.join(f'{x:g}R' for x in targets)}.")
     return (
         f"{t.get('ticker') or '?'} at {n('close'):,.0f} IDR, {where}. "
         f"RSI {rsi:.0f} ({rsi_word}). OBV slope {obv:+.2f} over 20 days "
         f"({'rising, volume confirming' if obv > 0 else 'falling'}). "
-        f"Foreign net buy {ff:+.1f}% of float over 20 days ({flow_word}). "
-        f"Beta vs JKSE {n('beta_vs_jkse', 1.0):.1f}. "
-        f"Stop {n('stop_pct'):.1f}% below entry, targets at "
-        f"{', '.join(f'{x:g}R' for x in targets)}. "
+        f"{flow} {risk} "
         f"Recent news: {t.get('news') or 'none tracked'}."
     )
 
@@ -425,7 +494,7 @@ def render(candidate):
 # ---------- self-check ----------
 CANDIDATE = {
     "ticker": "BBCA.JK", "tf": "1d", "close": 9800, "rsi": 71,
-    "obv_slope_20d": 0.12, "foreign_net_buy_20d_pct": 4.1, "beta_vs_jkse": 1.2,
+    "obv_slope_20d": 0.12, "foreign_net_100m_idr": 4.1, "foreign_net_sessions": 20,
     "distance_to_significant_high_pct": 0.0, "stop_pct": 3.1, "targets_r": [1, 2],
     "news": "positive dividend announcement, 3 days ago",
 }
@@ -481,13 +550,22 @@ def demo():
     # a candidate whose inputs are all absent must still render. candidate_state reports missing
     # inputs as None, and a bug here once made every such candidate crash the whole run.
     partial = dict(CANDIDATE, close=None, rsi=None, obv_slope_20d=None,
-                   foreign_net_buy_20d_pct=None, distance_to_significant_high_pct=None,
-                   stop_pct=None, targets_r=None, beta_vs_jkse=None, ticker=None)
+                   foreign_net_100m_idr=None, foreign_net_sessions=None,
+                   distance_to_significant_high_pct=None,
+                   stop_pct=None, targets_r=None, ticker=None)
     assert "?" in render(partial), "a candidate with no ticker must render, not raise"
     assert "no confirmed significant high" in render(partial), (
         "a candidate with no pivot must say so, not claim it is at a significant high")
     assert "at its last confirmed significant high" not in render(partial), (
         "never assert a level the candidate does not have")
+    # The fixture above carries every field, so it cannot catch a key that render() reads and
+    # screen.candidate_state() never produces. These three did, and every live decision was told
+    # the stop was 0.0% and the flow was flat.
+    assert "Foreign flow not available" in render(partial), (
+        "absent flow must be stated, never rendered as a flat 0.0")
+    assert "0.0% below entry" not in render(partial), (
+        "an absent stop must not be rendered as a 0.0% stop")
+    assert "Beta vs JKSE" not in render(partial), "beta is not measured, so it is not claimed"
 
     # One real call per backend, on the same state: the point of the demo is that the contract
     # holds whoever answers it. Then the configured backend, on the raw dict, because the prose

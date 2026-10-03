@@ -115,7 +115,14 @@ def ask_decider(session, passed, top, backend=None):
     decided = 0
     for v in ranked:
         code = v["code"]
-        state = screen.candidate_state(code, v)
+        # The plan comes first: the decider is asked whether the stop defines the risk, so it has
+        # to be shown the stop. Pure arithmetic over bars we already hold, so it costs nothing.
+        try:
+            plan = screener_plan(code)
+        except Exception as e:  # noqa: BLE001
+            plan = None
+            print(f"  {code}: no entry plan ({type(e).__name__})")
+        state = screen.candidate_state(code, v, plan)
         try:
             resp = decider.ask(decider.render(state), backend=backend)
         except decider.DeciderError as e:
@@ -123,13 +130,9 @@ def ask_decider(session, passed, top, backend=None):
             continue
         answers = resp["answers"]
         action, p = decider.decide(answers)
-        plan = None
-        if action == "ENTER":
-            try:
-                plan = screener_plan(code)
-            except Exception as e:  # noqa: BLE001
-                print(f"  {code}: no entry plan ({type(e).__name__})")
-        store.record(session, code, "prose", answers, action, plan, {
+        # the journal still records a plan only where a trade was taken, so its meaning is unchanged
+        store.record(session, code, "prose", answers, action,
+                     plan if action == "ENTER" else None, {
             "backend": resp["backend"],
             "model": resp.get("model"),
             "required_passed": v["required_passed"],
@@ -149,8 +152,7 @@ def ask_decider(session, passed, top, backend=None):
 def screener_plan(code):
     """The YES branch's entry plan. Already implemented in trading-tools: stop 1.5xATR, TP1 1R,
     TP2 2R. The decider never computes this — it cannot return a price."""
-    from tools import screener
-    return screener.plan(bars_for(code))
+    return screen.entry_plan(code)
 
 
 def forward_perf(bars, session, horizons=(5, 10, 20)):

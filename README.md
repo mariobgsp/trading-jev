@@ -254,6 +254,33 @@ model without touching the pipeline, the journal's schema or `check()`. That swa
 **alternative** — see [Alternative](#alternative-swap-the-decider-for-a-chat-model) — kept
 working and measured rather than deleted.
 
+### Recommended: the local Bekko service
+
+The default decider should be a **local** `hotchpotch/bekko-system-one-v0-17m`, not
+a hosted account. It runs on the CPU, answers in about 0.1s per candidate, asks
+nothing of the network at run time, and returned a contract-valid answer for
+99 of 99 candidates in `eval-bekko.json` (`failed_to_ask: 0`).
+
+It is **not** part of this repository. The model, its venv and its weights live in
+`~/Projects/bekko-local` and the Hugging Face cache, and stay there — this repo
+holds only the three lines that point at it:
+
+```bash
+JEV_BACKEND=structured
+JEV_API_URL=http://127.0.0.1:8730/decide
+JEV_MODEL=hotchpotch/bekko-system-one-v0-17m
+```
+
+`jev run ...` and `jev web` (a wrapper in `~/.local/bin`, not in this repo) start
+the service, wait for `/health`, and stop it again when the command exits. A
+service you started yourself is left alone.
+
+**Honest limits.** Its probabilities are not calibrated yet: Brier 0.413 against
+a 0.237 base rate on n=99, and the top bucket is inverted — where it says 0.81 it
+wins 34%. Trust the `verdict` and `conviction` prose; treat
+`verdict.probabilities.enter` as a mood until the journal calibrates it, because
+the [no-trade gate](#how-a-decision-is-actually-made) reads exactly that number.
+
 ### Alternative: swap the decider for a chat model
 
 `JEV_BACKEND=chat` hands a chat-completions model the same five questions as a literal JSON
