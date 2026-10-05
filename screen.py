@@ -34,6 +34,7 @@ Two additions worth calling out:
 import importlib.util
 import os
 
+import market
 from pivots import breakout, hh_breakout, lower_low
 from tools import screener
 
@@ -219,7 +220,40 @@ def entry_plan(code):
     still never computes a price itself — it only reads this one.
     """
     from tools import bars_for
-    return screener.plan(bars_for(code))
+    bars = bars_for(code)
+    plan = screener.plan(bars)
+    return _tradeable_plan(plan, bars)
+
+
+def _tradeable_plan(plan, bars):
+    """Put the plan's levels on real ticks, inside the band they would actually fill in.
+
+    Two corrections, both from market.py rather than from a literal here. trading-tools rounds
+    every level to a whole rupiah, which is only a legal price below Rp200 - from Rp200 to
+    Rp5,000 the tick is Rp2, Rp5 or Rp10, so an unrounded level is an order the exchange would
+    reject. And a stop under the ARA floor cannot fill at the price it names, which is the
+    asymmetry the band table exists to record.
+
+    Additive: the keys the plan already had keep their names and meanings.
+    """
+    if not plan or not bars:
+        return plan
+    entry = market.round_to_tick(plan.get("entry") or 0)
+    stop = market.round_to_tick(plan.get("stop") or 0)
+    previous = bars[-2].get("c_raw") or bars[-2].get("c") if len(bars) > 1 else entry
+    band = market.band_for(previous)
+    out = dict(plan)
+    out["entry"] = entry
+    out["stop"] = stop
+    out["tp1"] = market.round_to_tick(plan.get("tp1") or 0)
+    out["tp2"] = market.round_to_tick(plan.get("tp2") or 0)
+    if band and entry:
+        if not band.contains(entry):
+            out["entry"] = band.clamp(entry)
+        out["stop_in_band"] = band.contains(out["stop"])
+        out["stop"] = band.clamp(out["stop"])
+        out["band"] = {"lower": band.lower, "upper": band.upper, "symmetric": band.symmetric}
+    return out
 
 
 def candidate_state(code, verdict, plan=None):

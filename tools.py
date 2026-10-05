@@ -10,6 +10,8 @@ Set TRADING_TOOLS_DIR if trading-tools does not live beside this repo.
 import importlib.util
 import os
 
+import market
+
 TOOLS = os.environ.get("TRADING_TOOLS_DIR") or os.path.expanduser("~/Projects/trading-tools")
 _SCREENER = os.path.join(TOOLS, "ihsg-screener", "ihsg_screener.py")
 
@@ -23,6 +25,12 @@ _spec.loader.exec_module(screener)
 
 def bars_for(code, rng="6mo"):
     """Daily bars for a bare IDX code or an already-suffixed Yahoo symbol, via trading-tools'
-    cached, politeness-paced Yahoo fetcher."""
+    cached, politeness-paced Yahoo fetcher.
+
+    This is the one place a price series enters the program, so it is also the one place it
+    gets normalised: market.normalise_series tags the bars the vendor adjusted without telling
+    us, keeps the raw close where it survives, and never rescales anything - see the KNOWN
+    LIMITATION note in market.py for why a rights-issue adjustment cannot be repaired here.
+    """
     symbol = code if code.startswith("^") else f"{code}.JK"
-    return screener.fetch(symbol, rng)
+    return market.normalise_series(screener.fetch(symbol, rng))
