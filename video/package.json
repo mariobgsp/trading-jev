@@ -1,0 +1,17 @@
+{
+  "name": "trading-jev-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sound": "node scripts/make-sound.mjs",
+    "studio": "remotion studio src/index.js",
+    "still": "remotion still",
+    "render": "remotion render"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.529",
+    "remotion": "4.0.529",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}
