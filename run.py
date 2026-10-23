@@ -21,6 +21,7 @@ import sys
 
 import decider
 import idx
+import market
 import screen
 import store
 from tools import bars_for
@@ -63,6 +64,10 @@ def _score_one(row, index_bars, with_news):
         bars = bars_for(code)
         if not bars or len(bars) < 60:
             return None
+        ok, why = market.model_universe_eligible(
+            bars, price=row.get("close"), turnover=screen.liquidity(bars))
+        if not ok:
+            return {"code": code, "error": f"outside the model universe: {why}"}
         news = screen._news_score(code) if with_news else None
         v = screen.evaluate(code, bars, index_bars=index_bars, flow=row.get("flow"), news=news)
         if v is None:

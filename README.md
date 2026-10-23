@@ -409,6 +409,7 @@ a new laptop does not look like a broken install.
 |---|---|
 | `tools.py` | the single owner of the `trading-tools` dependency |
 | `idx.py` | IDX end-of-day summary: universe, suspended filter, float, foreign flow |
+| `market.py` | every IDX rule and cost: tick ladder, ARA/ARB bands, lots, the all-in cost model, price-series normalisation and the model-universe gate. Nothing else hardcodes a tick, a band or a fee |
 | `pivots.py` | significant highs and lows; self-check proves no repainting |
 | `screen.py` | the 23 categories, the two required gates, the rank score |
 | `decider.py` | the decision client, the five questions, and both backends |
